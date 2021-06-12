@@ -38,7 +38,10 @@ namespace FFmpeg.AutoGen.Example
         }
 
         public AVFrame Convert(AVFrame sourceFrame)
-        {
+        { 
+            //翻转后颜色不正常
+            //sourceFrame.data[0] += sourceFrame.linesize[0] * (sourceFrame.height - 1);
+            //sourceFrame.linesize[0] = -sourceFrame.linesize[0];
             ffmpeg.sws_scale(_pConvertContext, sourceFrame.data, sourceFrame.linesize, 0, sourceFrame.height, _dstData, _dstLinesize);
 
             var data = new byte_ptrArray8();

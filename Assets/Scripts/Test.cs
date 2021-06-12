@@ -6,18 +6,42 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Threading;
 using UnityEngine;
+using UnityEngine.UI;
 
 public class Test : MonoBehaviour
 {
+    Thread thread = null;
+    AVHWDeviceType deviceType;
+    string filePath;
+    Texture2D texture2D;
+    Queue<byte[]> imgQueue = new Queue<byte[]>();
+    public RawImage rawImage;
+
     // Start is called before the first frame update
     void Start()
     {
+        Loom.Initialize();
+        filePath = Application.streamingAssetsPath + "/";
         ffmpeg.RootPath = Application.streamingAssetsPath + "/FFmpeg/x86_64";
         Debug.LogWarning($"FFmpeg version info: {ffmpeg.av_version_info()}");
         SetupLogging();
         ConfigureHWDecoder(out var deviceType);
-        DecodeAllFramesToImages(deviceType);
+        thread = new Thread(new ThreadStart(DecodeTest));
+        thread.IsBackground = true;
+        thread.Start();
+    }
+
+    byte[] data;
+    private void FixedUpdate()
+    {
+        if (imgQueue.Count > 0)
+        {
+            data = imgQueue.Dequeue();
+            texture2D.LoadRawTextureData(data);
+            texture2D.Apply();
+        }
     }
 
     private static unsafe void SetupLogging()
@@ -67,7 +91,12 @@ public class Test : MonoBehaviour
         availableHWDecoders.TryGetValue(inputDecoderNumber == 0 ? decoderNumber : inputDecoderNumber, out HWtype);
     }
 
-    private static unsafe void DecodeAllFramesToImages(AVHWDeviceType HWDevice)
+    private void DecodeTest()
+    {
+        DecodeAllFramesToImages(deviceType);
+    }
+
+    private unsafe void DecodeAllFramesToImages(AVHWDeviceType HWDevice)
     {
         var url = "rtmp://58.200.131.2:1935/livetv/hunantv";
         using (var vsd = new VideoStreamDecoder(url, HWDevice))
@@ -81,28 +110,31 @@ public class Test : MonoBehaviour
             var sourcePixelFormat = HWDevice == AVHWDeviceType.AV_HWDEVICE_TYPE_NONE ? vsd.PixelFormat : GetHWPixelFormat(HWDevice);
             var destinationSize = sourceSize;
             var destinationPixelFormat = AVPixelFormat.AV_PIX_FMT_RGB24;
-            Texture2D texture2D = new Texture2D(sourceSize.Width, sourceSize.Height, TextureFormat.RGB24, false);
-            texture2D.Apply();
             int dataLen = sourceSize.Width * sourceSize.Height * 3;
+            Loom.QueueOnMainThread(() =>
+            {
+                texture2D = new Texture2D(sourceSize.Width, sourceSize.Height, TextureFormat.RGB24, false);
+                texture2D.Apply();
+                rawImage.texture = texture2D;
+            });
             byte[] tempData = new byte[dataLen];
             using (var vfc = new VideoFrameConverter(sourceSize, sourcePixelFormat, destinationSize, destinationPixelFormat))
             {
                 var frameNumber = 0;
                 while (vsd.TryDecodeNextFrame(out var frame))
                 {
-                    if (frameNumber > 15)
-                    {
-                        break;
-                    }
-                    else
-                    {
-                        AVFrame convertedFrame = vfc.Convert(frame);
-                        texture2D.LoadRawTextureData((IntPtr)convertedFrame.data[0], dataLen);
-                        texture2D.Apply();
-                        tempData = texture2D.EncodeToJPG();
-                        File.WriteAllBytes(Application.streamingAssetsPath + "/" + frameNumber + ".jpg", tempData);
-                        Debug.LogWarning($"frame: {frameNumber}");
-                    }
+                    //if (frameNumber > 15)
+                    //{
+                    //    break;
+                    //}
+                    //else
+                    //{
+                    AVFrame convertedFrame = vfc.Convert(frame);
+                    IntPtr imgPtr = (IntPtr)convertedFrame.data[0];
+                    Marshal.Copy((IntPtr)convertedFrame.data[0], tempData, 0, tempData.Length);
+                    imgQueue.Enqueue(tempData);
+                    //Debug.LogWarning($"frame: {frameNumber}");
+                    //}
                     frameNumber++;
                 }
             }
@@ -143,6 +175,17 @@ public class Test : MonoBehaviour
                 return AVPixelFormat.AV_PIX_FMT_MEDIACODEC;
             default:
                 return AVPixelFormat.AV_PIX_FMT_NONE;
+        }
+    }
+
+    private void OnApplicationQuit()
+    {
+        if (thread != null)
+        {
+            if (thread.IsAlive)
+            {
+                thread.Abort();
+            }
         }
     }
 }
