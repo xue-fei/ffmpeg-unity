@@ -88,7 +88,7 @@ namespace FFmpeg.AutoGen.Example
             var url = "http://clips.vorwaerts-gmbh.de/big_buck_bunny.mp4"; // be advised this file holds 1440 frames
             using (var vsd = new VideoStreamDecoder(url,HWDevice))
             {
-                Console.WriteLine($"codec name: {vsd.CodecName}");
+                Console.WriteLine($"codec name: {vsd.VideoCodecName}");
 
                 var info = vsd.GetContextInfo();
                 info.ToList().ForEach(x => Console.WriteLine($"{x.Key} = {x.Value}"));

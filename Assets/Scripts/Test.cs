@@ -39,8 +39,11 @@ public class Test : MonoBehaviour
         if (imgQueue.Count > 0)
         {
             data = imgQueue.Dequeue();
-            texture2D.LoadRawTextureData(data);
-            texture2D.Apply();
+            if (texture2D != null)
+            {
+                texture2D.LoadRawTextureData(data);
+                texture2D.Apply();
+            }
         }
     }
 
@@ -98,11 +101,12 @@ public class Test : MonoBehaviour
 
     private unsafe void DecodeAllFramesToImages(AVHWDeviceType HWDevice)
     {
-        var url = "rtmp://58.200.131.2:1935/livetv/hunantv";
+        //var url = "rtmp://58.200.131.2:1935/livetv/hunantv";
+        var url = Application.streamingAssetsPath + "/test.mp4";
         using (var vsd = new VideoStreamDecoder(url, HWDevice))
         {
-            Debug.LogWarning($"codec name: {vsd.CodecName}");
-
+            Debug.LogWarning($"VideoCodecName: {vsd.VideoCodecName}");
+            Debug.LogWarning($"AudioCodecName: {vsd.AudioCodecName}");
             var info = vsd.GetContextInfo();
             info.ToList().ForEach(x => Console.WriteLine($"{x.Key} = {x.Value}"));
 
@@ -123,18 +127,12 @@ public class Test : MonoBehaviour
                 var frameNumber = 0;
                 while (vsd.TryDecodeNextFrame(out var frame))
                 {
-                    //if (frameNumber > 15)
-                    //{
-                    //    break;
-                    //}
-                    //else
-                    //{
                     AVFrame convertedFrame = vfc.Convert(frame);
                     IntPtr imgPtr = (IntPtr)convertedFrame.data[0];
                     Marshal.Copy((IntPtr)convertedFrame.data[0], tempData, 0, tempData.Length);
                     imgQueue.Enqueue(tempData);
-                    //Debug.LogWarning($"frame: {frameNumber}");
-                    //}
+                    int bufferSize = ffmpeg.av_samples_get_buffer_size(null, frame.channels, frame.nb_samples, vsd.Sample_fmt, 1);
+                    //frame.
                     frameNumber++;
                 }
             }
