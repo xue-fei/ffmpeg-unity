@@ -1,4 +1,4 @@
-using NAudio.Wave;
+Ôªøusing NAudio.Wave;
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -25,16 +25,16 @@ namespace FFmpeg.AutoGen.Example
         int out_ch_layout;
         int outChannelCount;
 
-        WaveOut waveOut;            //≤•∑≈∆˜
-        BufferedWaveProvider bufferedWaveProvider;       //5sª∫¥Ê«¯
+        //WaveOut waveOut;            //Êí≠ÊîæÂô®
+        //BufferedWaveProvider bufferedWaveProvider; 
 
         public AudioStreamDecoder(string url)
         {
-            waveOut = new WaveOut();
-            WaveFormat wf = new WaveFormat(44100, 2);
-            bufferedWaveProvider = new BufferedWaveProvider(wf);
-            waveOut.Init(bufferedWaveProvider);
-            waveOut.Play(); 
+            //waveOut = new WaveOut();
+            //WaveFormat wf = new WaveFormat(44100, 2);
+            //bufferedWaveProvider = new BufferedWaveProvider(wf);
+            //waveOut.Init(bufferedWaveProvider);
+            //waveOut.Play(); 
 
             _pFormatContext = ffmpeg.avformat_alloc_context();
             var pFormatContext = _pFormatContext;
@@ -44,68 +44,68 @@ namespace FFmpeg.AutoGen.Example
             _audioStreamIndex = ffmpeg.av_find_best_stream(_pFormatContext, AVMediaType.AVMEDIA_TYPE_AUDIO, -1, -1, &audioCodec, 0).ThrowExceptionIfError();
             UnityEngine.Debug.LogWarning("_audioStreamIndex:" + _audioStreamIndex);
             _pAudioContext = ffmpeg.avcodec_alloc_context3(audioCodec);
-            // ƒ√µΩ∂‘”¶“Ù∆µ¡˜µƒ≤Œ ˝
+            // ÊãøÂà∞ÂØπÂ∫îÈü≥È¢ëÊµÅÁöÑÂèÇÊï∞
             AVCodecParameters* avCodecParameters = _pFormatContext->streams[_audioStreamIndex]->codecpar;
-            // Ω´–¬µƒAPI÷–µƒ codecpar ◊™≥… AVCodecContext
+            // Â∞ÜÊñ∞ÁöÑAPI‰∏≠ÁöÑ codecpar ËΩ¨Êàê AVCodecContext
             ffmpeg.avcodec_parameters_to_context(_pAudioContext, avCodecParameters);
             ffmpeg.avcodec_open2(_pAudioContext, audioCodec, null).ThrowExceptionIfError();
 
-            //—πÀı ˝æ›∞¸
+            //ÂéãÁº©Êï∞ÊçÆÂåÖ
             _pPacket = ffmpeg.av_packet_alloc();
-            //Ω‚—πÀı∫Û¥Ê∑≈µƒ ˝æ›÷°µƒ∂‘œÛ
+            //Ëß£ÂéãÁº©ÂêéÂ≠òÊîæÁöÑÊï∞ÊçÆÂ∏ßÁöÑÂØπË±°
             _pFrame = ffmpeg.av_frame_alloc();
-            //frame->16bit 44100 PCM Õ≥“ª“Ù∆µ≤…—˘∏Ò Ω”Î≤…—˘¬ 
-            //¥¥Ω®swrcontext…œœ¬Œƒº˛
+            //frame->16bit 44100 PCM Áªü‰∏ÄÈü≥È¢ëÈááÊ†∑Ê†ºÂºè‰∏éÈááÊ†∑Áéá
+            //ÂàõÂª∫swrcontext‰∏ä‰∏ãÊñá‰ª∂
             swrContext = ffmpeg.swr_alloc();
-            //“Ù∆µ∏Ò Ω   ‰»Îµƒ≤…—˘…Ë÷√≤Œ ˝
+            //Èü≥È¢ëÊ†ºÂºè  ËæìÂÖ•ÁöÑÈááÊ†∑ËÆæÁΩÆÂèÇÊï∞
             inFormat = _pAudioContext->sample_fmt;
-            // ≥ˆ»Îµƒ≤…—˘∏Ò Ω
+            // Âá∫ÂÖ•ÁöÑÈááÊ†∑Ê†ºÂºè
             outFormat = AVSampleFormat.AV_SAMPLE_FMT_S16;
-            //  ‰»Î≤…—˘¬ 
+            // ËæìÂÖ•ÈááÊ†∑Áéá
             inSampleRate = _pAudioContext->sample_rate;
-            //  ‰≥ˆ≤…—˘¬ 
+            // ËæìÂá∫ÈááÊ†∑Áéá
             outSampleRate = 44100;
-            //  ‰»Î…˘µ¿≤ºæ÷
+            // ËæìÂÖ•Â£∞ÈÅìÂ∏ÉÂ±Ä
             in_ch_layout = _pAudioContext->channel_layout;
-            // ‰≥ˆ…˘µ¿≤ºæ÷
+            //ËæìÂá∫Â£∞ÈÅìÂ∏ÉÂ±Ä
             out_ch_layout = ffmpeg.AV_CH_LAYOUT_STEREO;
-            //∏¯Swrcontext ∑÷≈‰ø’º‰£¨…Ë÷√π´π≤≤Œ ˝
+            //ÁªôSwrcontext ÂàÜÈÖçÁ©∫Èó¥ÔºåËÆæÁΩÆÂÖ¨ÂÖ±ÂèÇÊï∞
             ffmpeg.swr_alloc_set_opts(swrContext, out_ch_layout, outFormat, outSampleRate,
                     (long)in_ch_layout, inFormat, inSampleRate, 0, null
                     );
-            // ≥ı ºªØ
+            // ÂàùÂßãÂåñ
             ffmpeg.swr_init(swrContext);
-            // ªÒ»°…˘µ¿ ˝¡ø
+            // Ëé∑ÂèñÂ£∞ÈÅìÊï∞Èáè
             outChannelCount = ffmpeg.av_get_channel_layout_nb_channels((ulong)out_ch_layout);
-            Debug.LogWarning("…˘µ¿ ˝¡ø%d " + outChannelCount);
+            Debug.LogWarning("Â£∞ÈÅìÊï∞Èáè%d " + outChannelCount);
         }
 
         int currentIndex = 0;
 
         public bool TryDecodeNextFrame(out byte[] frame)
         {
-            // …Ë÷√“Ù∆µª∫≥Â«¯º‰ 16bit   44100  PCM ˝æ›, À´…˘µ¿
+            // ËÆæÁΩÆÈü≥È¢ëÁºìÂÜ≤Âå∫Èó¥ 16bit   44100  PCMÊï∞ÊçÆ, ÂèåÂ£∞ÈÅì
             byte* out_buffer = (byte*)Marshal.AllocHGlobal(2 * 44100);
-            //ø™ º∂¡»°‘¥Œƒº˛£¨Ω¯––Ω‚¬Î
+            //ÂºÄÂßãËØªÂèñÊ∫êÊñá‰ª∂ÔºåËøõË°åËß£Á†Å
             if (ffmpeg.av_read_frame(_pFormatContext, _pPacket) >= 0)
             {
                 if (_pPacket->stream_index == _audioStreamIndex)
                 {
                     ffmpeg.avcodec_send_packet(_pAudioContext, _pPacket);
-                    //Ω‚¬Î
+                    //Ëß£Á†Å
                     int ret = ffmpeg.avcodec_receive_frame(_pAudioContext, _pFrame);
                     if (ret == 0)
                     {
-                        //Ω´√ø“ª÷° ˝æ›◊™ªª≥…pcm
+                        //Â∞ÜÊØè‰∏ÄÂ∏ßÊï∞ÊçÆËΩ¨Êç¢Êàêpcm
                         ret = ffmpeg.swr_convert(swrContext, &out_buffer, 2 * 44100,
                                     (byte**)&_pFrame->data, _pFrame->nb_samples);
-                        //ªÒ»° µº µƒª∫¥Ê¥Û–°
+                        //Ëé∑ÂèñÂÆûÈôÖÁöÑÁºìÂ≠òÂ§ßÂ∞è
                         int out_buffer_size = ffmpeg.av_samples_get_buffer_size(null, outChannelCount, _pFrame->nb_samples, outFormat, 1);
                         byte[] write = new byte[out_buffer_size];
                         Marshal.Copy((IntPtr)out_buffer, write, 0, write.Length);
-                        bufferedWaveProvider.AddSamples(write, 0, out_buffer_size);
+                        //bufferedWaveProvider.AddSamples(write, 0, out_buffer_size);
                         frame = write;
-                        Debug.LogWarning("’˝‘⁄Ω‚¬Î%d" + currentIndex++);
+                        Debug.LogWarning("Ê≠£Âú®Ëß£Á†Å%d" + currentIndex++);
                         Thread.Sleep(22);
                         return true;
                     }
@@ -113,7 +113,7 @@ namespace FFmpeg.AutoGen.Example
                     {
                         frame = null;
                         return false;
-                    } 
+                    }
                 }
                 else
                 {
@@ -130,8 +130,8 @@ namespace FFmpeg.AutoGen.Example
 
         public void Dispose()
         {
-            waveOut.Stop();
-            waveOut.Dispose();
+            //waveOut.Stop();
+            //waveOut.Dispose();
             ffmpeg.av_frame_unref(_pFrame);
             ffmpeg.av_free(_pFrame);
 

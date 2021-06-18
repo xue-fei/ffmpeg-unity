@@ -59,9 +59,40 @@ public class AudioTest : MonoBehaviour
         {
             if (asd.TryDecodeNextFrame(out var frame))
             {
-
+                bsBuffer = frame;
             }
         }
+    }
+
+    private byte[] bsBuffer = new byte[4096];
+
+    private void OnAudioFilterRead(float[] data, int channels)
+    {
+        float[] _buffer = ByteArrayToFloatArray(bsBuffer, bsBuffer.Length);
+        for (int i = 0; i < data.Length; i++)
+        {
+            data[i] = _buffer[i];
+        }
+    }
+
+    public static float[] ByteArrayToFloatArray(byte[] byteArray, int length)
+    {
+        float[] resultFloatArray = new float[length / 2];
+        if (resultFloatArray == null || resultFloatArray.Length != (length / 2))
+        {
+            resultFloatArray = new float[length / 2];
+        }
+        int arrIdx = 0;
+        for (int i = 0; i < length; i += 2)
+        {
+            resultFloatArray[arrIdx++] = BytesToFloat(byteArray[i], byteArray[i + 1]);
+        }
+        return resultFloatArray;
+    }
+
+    static float BytesToFloat(byte firstByte, byte secondByte)
+    {
+        return (float)((short)((int)secondByte << 8 | (int)firstByte)) / 32768f;
     }
 
     private void OnApplicationQuit()
