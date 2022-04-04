@@ -5,8 +5,8 @@ Unity FFmpeg.AutoGen
 目标 通过FFmpeg.AutoGen使用FFmpeg，实现播放本地视频和网络视频流的功能
 
 已经拿到并显示/播放音视频帧
-接下来……
-不想搞了-_-
+接下来……是音视频同步
+不想搞了-_-（搞不懂）
 ![720P](https://images.gitee.com/uploads/images/2021/0626/213010_da3095b6_80624.png "FFmpeg1.png")
 
 ![4K](https://images.gitee.com/uploads/images/2021/0626/213054_c88d2b72_80624.png "FFmpeg2.png")
