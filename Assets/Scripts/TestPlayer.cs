@@ -11,6 +11,9 @@ public class TestPlayer : MonoBehaviour
     public RawImage rawImage;
     FFPlayer ffPlayer;
 
+    float frameRate = 0.0416f;
+    float nextFrame = 0.0f;
+
     // Start is called before the first frame update
     void Start()
     {
@@ -23,13 +26,17 @@ public class TestPlayer : MonoBehaviour
     // Update is called once per frame
     void Update()
     {
-        if (imgQueue.Count > 0)
+        if(Time.time > nextFrame)
         {
-            data = imgQueue.Dequeue();
-            if (texture2D != null)
+            nextFrame = Time.time + frameRate;
+            if (imgQueue.Count > 0)
             {
-                texture2D.LoadRawTextureData(data);
-                texture2D.Apply();
+                data = imgQueue.Dequeue();
+                if (texture2D != null)
+                {
+                    texture2D.LoadRawTextureData(data);
+                    texture2D.Apply();
+                }
             }
         }
     }

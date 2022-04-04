@@ -213,23 +213,7 @@ namespace UnityFFmpeg
                         Marshal.FreeCoTaskMem(imgPtr);
                     }
                 }
-                Thread.Sleep(12);
             }
-        }
-
-        public void Play()
-        {
-
-        }
-
-        public void Pause()
-        {
-
-        }
-
-        public void Stop()
-        {
-
         }
 
         private unsafe void SetupLogging()
@@ -321,6 +305,12 @@ namespace UnityFFmpeg
                 }
             }
 
+            ffmpeg.avcodec_close(_pVideoContext);
+            ffmpeg.avcodec_close(_pAudioContext);
+
+            var pFormatContext = _pFormatContext;
+            ffmpeg.avformat_close_input(&pFormatContext);
+
             ffmpeg.av_frame_unref(_audioFrame);
             ffmpeg.av_free(_audioFrame);
 
@@ -332,12 +322,6 @@ namespace UnityFFmpeg
 
             ffmpeg.av_packet_unref(_packet);
             ffmpeg.av_free(_packet);
-
-            ffmpeg.avcodec_close(_pVideoContext);
-            ffmpeg.avcodec_close(_pAudioContext);
-
-            var pFormatContext = _pFormatContext;
-            ffmpeg.avformat_close_input(&pFormatContext);
         }
     }
 }
