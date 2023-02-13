@@ -17,6 +17,7 @@ public unsafe class VideoDecoder : IMedia
     AVFrame* frame;
     //图像转换器
     SwsContext* convert;
+    AVHWDeviceType deviceType = AVHWDeviceType.AV_HWDEVICE_TYPE_NONE;
     //视频流
     AVStream* videoStream;
     // 视频流在媒体容器上流的索引
@@ -94,6 +95,10 @@ public unsafe class VideoDecoder : IMedia
         videoStream = format->streams[videoStreamIndex];
         //创建解码器上下文
         codecContext = ffmpeg.avcodec_alloc_context3(codec);
+        if (deviceType != AVHWDeviceType.AV_HWDEVICE_TYPE_NONE)
+        {
+            ffmpeg.av_hwdevice_ctx_create(&codecContext->hw_device_ctx, deviceType, null, null, 0).ThrowExceptionIfError();
+        }
         //将视频流里面的解码器参数设置到 解码器上下文中
         error = ffmpeg.avcodec_parameters_to_context(codecContext, videoStream->codecpar);
         if (error < 0)
@@ -115,10 +120,11 @@ public unsafe class VideoDecoder : IMedia
         CodecName = ffmpeg.avcodec_get_name(videoStream->codecpar->codec_id);
         Bitrate = (int)videoStream->codecpar->bit_rate;
         FrameRate = ffmpeg.av_q2d(videoStream->r_frame_rate);
-        FrameWidth = videoStream->codecpar->width;
-        FrameHeight = videoStream->codecpar->height;
+        FrameWidth = codecContext->width;
+        FrameHeight = codecContext->height;
+        Debug.LogWarning(FrameWidth + " " + FrameHeight);
         frameDuration = TimeSpan.FromMilliseconds(1000 / FrameRate);
-        //初始化转换器，将图片从源格式 转换成 BGR0 （8:8:8）格式
+        //初始化转换器，将图片从源格式 转换成 BGR0 （8:8:8）格式 
         var result = InitConvert(FrameWidth, FrameHeight, codecContext->pix_fmt, FrameWidth, FrameHeight, AVPixelFormat.AV_PIX_FMT_BGR0);
         //所有内容都初始化成功了开启时钟，用来记录时间
         if (result)
@@ -127,7 +133,11 @@ public unsafe class VideoDecoder : IMedia
             packet = ffmpeg.av_packet_alloc();
             frame = ffmpeg.av_frame_alloc();
         }
+        bytes = new byte[FrameWidth * FrameHeight * 4];
     }
+
+    byte_ptrArray8 bpa;
+    int_array8 linesize;
     /// <summary>
     /// 初始化转换器
     /// </summary>
@@ -141,7 +151,9 @@ public unsafe class VideoDecoder : IMedia
     bool InitConvert(int sourceWidth, int sourceHeight, AVPixelFormat sourceFormat, int targetWidth, int targetHeight, AVPixelFormat targetFormat)
     {
         //根据输入参数和输出参数初始化转换器
-        convert = ffmpeg.sws_getContext(sourceWidth, sourceHeight, sourceFormat, targetWidth, targetHeight, targetFormat, ffmpeg.SWS_FAST_BILINEAR, null, null, null);
+        convert = ffmpeg.sws_getContext(sourceWidth, sourceHeight, sourceFormat,
+            targetWidth, targetHeight, targetFormat,
+            ffmpeg.SWS_FAST_BILINEAR, null, null, null);
         if (convert == null)
         {
             Debug.LogError("创建转换器失败");
@@ -153,20 +165,24 @@ public unsafe class VideoDecoder : IMedia
         FrameBufferPtr = Marshal.AllocHGlobal(bufferSize);
         TargetData = new byte_ptrArray4();
         TargetLinesize = new int_array4();
+        bpa = new byte_ptrArray8();
+        linesize = new int_array8();
         ffmpeg.av_image_fill_arrays(ref TargetData, ref TargetLinesize, (byte*)FrameBufferPtr, targetFormat, targetWidth, targetHeight, 1);
         return true;
     }
+    byte[] bytes;
     public byte[] FrameConvertBytes(AVFrame* sourceFrame)
     {
         // 利用转换器将yuv 图像数据转换成指定的格式数据
-        ffmpeg.sws_scale(convert, sourceFrame->data, sourceFrame->linesize, 0, sourceFrame->height, TargetData, TargetLinesize);
-        var data = new byte_ptrArray8();
-        data.UpdateFrom(TargetData);
-        var linesize = new int_array8();
+        ffmpeg.sws_scale(convert, sourceFrame->data,
+            sourceFrame->linesize, 0, sourceFrame->height,
+            TargetData, TargetLinesize);
+        
+        bpa.UpdateFrom(TargetData); 
         linesize.UpdateFrom(TargetLinesize);
-        //创建一个字节数据，将转换后的数据从内存中读取成字节数组
-        byte[] bytes = new byte[FrameWidth * FrameHeight * 4];
-        Marshal.Copy((IntPtr)data[0], bytes, 0, bytes.Length);
+        //创建一个字节数据，将转换后的数据从内存中读取成字节数组 
+        //byte[] bytes = new byte[FrameWidth * FrameHeight * 4];
+        Marshal.Copy((IntPtr)bpa[0], bytes, 0, bytes.Length);
         return bytes;
     }
     public bool TryReadNextFrame(out AVFrame outFrame)
@@ -191,14 +207,13 @@ public unsafe class VideoDecoder : IMedia
         }
         if (isNextFrame)
         {
-
             lock (SyncLock)
             {
-                int result = -1;
-                //清理上一帧的数据
-                ffmpeg.av_frame_unref(frame);
+                int result = -1; 
                 while (true)
                 {
+                    //清理上一帧的数据
+                    ffmpeg.av_frame_unref(frame);
                     //清理上一帧的数据包
                     ffmpeg.av_packet_unref(packet);
                     //读取下一帧，返回一个int 查看读取数据包的状态
