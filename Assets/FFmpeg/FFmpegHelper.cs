@@ -29,7 +29,7 @@ namespace FFmpeg.AutoGen
                 var printPrefix = 1;
                 ffmpeg.av_log_format_line(p0, level, format, vl, lineBuffer, lineSize, &printPrefix);
                 var line = Marshal.PtrToStringAnsi((IntPtr)lineBuffer);
-                UnityEngine.Debug.LogWarning(line);
+                Debug.LogWarning(line);
             };
             ffmpeg.av_log_set_callback(logCallback);
         }

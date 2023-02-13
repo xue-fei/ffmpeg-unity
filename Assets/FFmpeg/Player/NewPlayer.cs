@@ -1,8 +1,6 @@
-using FFmpeg.AutoGen;
-using System;
+ï»¿using FFmpeg.AutoGen;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Timers;
 using UnityEngine;
 using UnityEngine.Events;
 using UnityEngine.EventSystems;
@@ -10,11 +8,11 @@ using UnityEngine.UI;
 
 public class NewPlayer : MonoBehaviour
 {
-    VideoDecoder video = new VideoDecoder(); 
+    VideoDecoder video = new VideoDecoder();
     Task PlayTask;
     CancellationTokenSource cts = new CancellationTokenSource();
     CancellationToken ct;
-    public RawImage rawImage;
+    public Image image;
     Texture2D texture2D;
     public Slider slider;
     public Text text;
@@ -22,13 +20,15 @@ public class NewPlayer : MonoBehaviour
     // Start is called before the first frame update
     void Start()
     {
-        ct = cts.Token; 
+        Application.targetFrameRate = 30;
+        Debug.LogWarning("Start");
+        ct = cts.Token;
         Loom.Initialize();
         FFmpegHelper.Init();
         Loom.RunAsync(() =>
         {
             Play();
-        }); 
+        });
 
         UnityAction<BaseEventData> drag = new UnityAction<BaseEventData>(OnDrag);
         EventTrigger.Entry myDrag = new EventTrigger.Entry();
@@ -37,27 +37,27 @@ public class NewPlayer : MonoBehaviour
         EventTrigger eventTrigger = slider.gameObject.AddComponent<EventTrigger>();
         eventTrigger.triggers.Add(myDrag);
     }
-     
+
     unsafe void Play()
     {
         //var url = "http://39.134.115.163:8080/PLTV/88888910/224/3221225632/index.m3u8";
         var url = Application.streamingAssetsPath + "/test.mp4";
-        //³õÊ¼»¯½âÂëÊÓÆµ
+        //åˆå§‹åŒ–è§£ç è§†é¢‘
         video.InitDecodecVideo(url);
-        video.Play(); 
-
+        video.Play();
         PlayTask = new Task(() =>
         {
             while (true)
             {
-                if(ct.IsCancellationRequested)
+                Thread.Sleep(1);
+                if (ct.IsCancellationRequested)
                 {
                     break;
                 }
-                //²¥·ÅÖÐ
+                //æ’­æ”¾ä¸­
                 if (video.IsPlaying)
                 {
-                    //»ñÈ¡ÏÂÒ»Ö¡ÊÓÆµ
+                    //èŽ·å–ä¸‹ä¸€å¸§è§†é¢‘
                     if (video.TryReadNextFrame(out var frame))
                     {
                         var bytes = video.FrameConvertBytes(&frame);
@@ -67,18 +67,18 @@ public class NewPlayer : MonoBehaviour
                             {
                                 texture2D = new Texture2D(video.FrameWidth, video.FrameHeight, TextureFormat.BGRA32, false);
                                 texture2D.Apply();
-                                rawImage.texture = texture2D;
                             }
                             texture2D.LoadRawTextureData(bytes);
                             texture2D.Apply();
+                            image.sprite = Sprite.Create(texture2D, new Rect(0, 0, texture2D.width, texture2D.height), new Vector2(0.5f, 0.5f));
                             text.text = video.Position.ToString();
                             slider.value = (float)(video.Position.TotalSeconds / video.Duration.TotalSeconds);
                         });
-                    } 
+                    }
                 }
             }
         });
-        PlayTask.Start(); 
+        PlayTask.Start();
         video.MediaCompleted += (s) =>
         {
             video.Stop();
@@ -86,7 +86,7 @@ public class NewPlayer : MonoBehaviour
     }
 
     private void OnApplicationQuit()
-    { 
+    {
         if (video.IsPlaying)
         {
             video.Stop();
@@ -97,5 +97,5 @@ public class NewPlayer : MonoBehaviour
     void OnDrag(BaseEventData data)
     {
         video.SeekProgress((int)(slider.value * video.Duration.TotalSeconds));
-    } 
+    }
 }

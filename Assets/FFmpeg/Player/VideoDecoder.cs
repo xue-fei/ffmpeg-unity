@@ -200,7 +200,7 @@ public unsafe class VideoDecoder : IMedia
                 isNextFrame = true;
             }
             else
-            {
+            { 
                 outFrame = *frame;
                 return false;
             }
@@ -293,7 +293,9 @@ public unsafe class VideoDecoder : IMedia
     public void SeekProgress(int seekTime)
     {
         if (format == null || videoStream == null)
+        { 
             return;
+        }
         lock (SyncLock)
         {
             IsPlaying = false;//将视频暂停播放
