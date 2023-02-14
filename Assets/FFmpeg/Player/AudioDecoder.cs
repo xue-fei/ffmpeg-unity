@@ -106,8 +106,12 @@ public unsafe class AudioDecoder : IMedia
             Debug.LogError("设置解码器参数失败");
         }
         error = ffmpeg.avcodec_open2(codecContext, codec, null);
+        double d = format->duration / 1000;
         //媒体时长
-        Duration = TimeSpan.FromMilliseconds(format->duration / 1000);
+        if (d >= 0)
+        {
+            Duration = TimeSpan.FromMilliseconds(d);
+        }
         //编解码id
         CodecId = codec->id.ToString();
         //解码器名字
@@ -184,7 +188,6 @@ public unsafe class AudioDecoder : IMedia
         }
         if (isNextFrame)
         {
-
             lock (SyncLock)
             {
                 int result = -1;
@@ -270,6 +273,7 @@ public unsafe class AudioDecoder : IMedia
             MediaCompleted?.Invoke(Duration);
         }
     }
+
     /// <summary>
     /// 更改进度
     /// </summary>
@@ -311,7 +315,7 @@ public unsafe class AudioDecoder : IMedia
             lastTime = TimeSpan.Zero;
         }
     }
-     
+
     /// <summary>
     /// 将音频帧转换成字节数组
     /// </summary>
@@ -359,27 +363,33 @@ public unsafe class AudioDecoder : IMedia
     public void Play()
     {
         if (State == MediaState.Play)
+        {
             return;
+        }
         clock.Start();
         IsPlaying = true;
-        State = MediaState.Play;
-
+        State = MediaState.Play; 
     }
+
     public void Pause()
     {
         if (State != MediaState.Play)
+        {
             return;
+        }
         IsPlaying = false;
         OffsetClock = clock.Elapsed;
         clock.Stop();
-        clock.Reset();
-
+        clock.Reset(); 
         State = MediaState.Pause;
     }
+
     public void Stop()
     {
         if (State == MediaState.None)
+        {
             return;
+        }
         StopPlay();
     }
 }

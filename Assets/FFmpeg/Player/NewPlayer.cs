@@ -5,10 +5,16 @@ using UnityEngine;
 using UnityEngine.Events;
 using UnityEngine.EventSystems;
 using UnityEngine.UI;
+using NAudio.Wave;
 
 public class NewPlayer : MonoBehaviour
 {
-    VideoDecoder video = new VideoDecoder();
+    VideoDecoder videoDecoder = new VideoDecoder();
+    AudioDecoder audioDecoder = new AudioDecoder();
+    //播放器
+    WaveOut waveOut;
+    //缓存区
+    BufferedWaveProvider bufferedWaveProvider;
     Task PlayTask;
     CancellationTokenSource cts = new CancellationTokenSource();
     CancellationToken ct;
@@ -24,6 +30,11 @@ public class NewPlayer : MonoBehaviour
         ct = cts.Token;
         Loom.Initialize();
         FFmpegHelper.Init();
+        waveOut = new WaveOut();
+        WaveFormat wf = new WaveFormat(44100, 2);
+        bufferedWaveProvider = new BufferedWaveProvider(wf);
+        waveOut.Init(bufferedWaveProvider);
+        waveOut.Play();
         Loom.RunAsync(() =>
         {
             Play();
@@ -39,64 +50,94 @@ public class NewPlayer : MonoBehaviour
 
     unsafe void Play()
     {
-        var url = "http://39.134.115.163:8080/PLTV/88888910/224/3221225632/index.m3u8";
-        //var url = Application.streamingAssetsPath + "/test.mp4";
+        //var url = "http://39.134.115.163:8080/PLTV/88888910/224/3221225632/index.m3u8";
+        var url = Application.streamingAssetsPath + "/test.mp4";
+
+        audioDecoder.InitDecodecAudio(url);
+        audioDecoder.Play();
+
         //初始化解码视频
-        video.InitDecodecVideo(url);
-        video.Play();
+        videoDecoder.InitDecodecVideo(url);
+        videoDecoder.Play();
+
         PlayTask = new Task(() =>
         {
             while (true)
             {
-                Thread.Sleep(1);
+                //Thread.Sleep(1);
                 if (ct.IsCancellationRequested)
                 {
                     break;
                 }
+
+                if (audioDecoder.IsPlaying)
+                {
+                    //获取下一帧音频
+                    if (audioDecoder.TryReadNextFrame(out var frame))
+                    {
+                        var bytes = audioDecoder.FrameConvertBytes(&frame);
+                        if (bytes != null)
+                        {
+                            //if (bufferedWaveProvider.BufferLength <= bufferedWaveProvider.BufferedBytes + bytes.Length)
+                            //{
+                            //    bufferedWaveProvider.ClearBuffer();
+                            //}
+                            bufferedWaveProvider.AddSamples(bytes, 0, bytes.Length);//向缓存中添加音频样本 
+                        }
+                    }
+                }
                 //播放中
-                if (video.IsPlaying)
+                if (videoDecoder.IsPlaying)
                 {
                     //获取下一帧视频
-                    if (video.TryReadNextFrame(out var frame))
+                    if (videoDecoder.TryReadNextFrame(out var frame))
                     {
-                        var bytes = video.FrameConvertBytes(&frame);
+                        var vdata = videoDecoder.FrameConvertBytes(&frame);
                         Loom.QueueOnMainThread(() =>
                         {
                             if (texture2D == null)
                             {
-                                texture2D = new Texture2D(video.FrameWidth, video.FrameHeight, TextureFormat.BGRA32, false);
+                                texture2D = new Texture2D(videoDecoder.FrameWidth, videoDecoder.FrameHeight, TextureFormat.BGRA32, false);
                                 texture2D.Apply();
                                 image.texture = texture2D;
-                                image.GetComponent<AspectRatioFitter>().aspectRatio = (float)video.FrameWidth / (float)video.FrameHeight;
+                                image.GetComponent<AspectRatioFitter>().aspectRatio = (float)videoDecoder.FrameWidth / (float)videoDecoder.FrameHeight;
                             }
-                            texture2D.LoadRawTextureData(bytes);
-                            texture2D.Apply(); 
+                            texture2D.LoadRawTextureData(vdata);
+                            texture2D.Apply();
                             //image.sprite = Sprite.Create(texture2D, new Rect(0, 0, texture2D.width, texture2D.height), new Vector2(0.5f, 0.5f));
-                            text.text = video.Position.ToString();
-                            slider.value = (float)(video.Position.TotalSeconds / video.Duration.TotalSeconds);
+                            text.text = videoDecoder.Position.ToString();
+                            slider.value = (float)(videoDecoder.Position.TotalSeconds / videoDecoder.Duration.TotalSeconds);
                         });
                     }
                 }
             }
         });
         PlayTask.Start();
-        video.MediaCompleted += (s) =>
+        videoDecoder.MediaCompleted += (s) =>
         {
-            video.Stop();
+            videoDecoder.Stop();
+            audioDecoder.Stop();
         };
     }
 
     private void OnApplicationQuit()
     {
-        if (video.IsPlaying)
+        if (videoDecoder.IsPlaying)
         {
-            video.Stop();
+            videoDecoder.Stop();
+        }
+        if (audioDecoder.IsPlaying)
+        {
+            audioDecoder.Stop();
         }
         cts.Cancel();
+        waveOut.Stop();
+        waveOut.Dispose();
     }
 
     void OnDrag(BaseEventData data)
     {
-        video.SeekProgress((int)(slider.value * video.Duration.TotalSeconds));
+        videoDecoder.SeekProgress((int)(slider.value * videoDecoder.Duration.TotalSeconds));
+        audioDecoder.SeekProgress((int)(slider.value * audioDecoder.Duration.TotalSeconds));
     }
 }
