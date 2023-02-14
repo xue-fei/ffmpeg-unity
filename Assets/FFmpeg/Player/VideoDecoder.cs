@@ -81,7 +81,12 @@ public unsafe class VideoDecoder : IMedia
             return;
         }
         //嗅探媒体信息
-        ffmpeg.avformat_find_stream_info(format, null);
+        error = ffmpeg.avformat_find_stream_info(format, null);
+        if (error < 0)
+        {
+            Debug.LogError("嗅探媒体信息失败");
+            return;
+        }
         //编解码器类型
         AVCodec* codec = null;
         //获取视频流索引
@@ -113,16 +118,19 @@ public unsafe class VideoDecoder : IMedia
             Debug.LogError("打开解码器失败");
             return;
         }
-        //视频时长等视频信息
-        //Duration = TimeSpan.FromMilliseconds(videoStream->duration / ffmpeg.av_q2d(videoStream->time_base));
-        Duration = TimeSpan.FromMilliseconds(format->duration / 1000);
+        //视频时长等视频信息,网络视频流是负值
+        double d = format->duration / 1000;
+        if (d >= 0)
+        {
+            Duration = TimeSpan.FromMilliseconds(d);
+        }
         CodecId = videoStream->codecpar->codec_id.ToString();
         CodecName = ffmpeg.avcodec_get_name(videoStream->codecpar->codec_id);
         Bitrate = (int)videoStream->codecpar->bit_rate;
         FrameRate = ffmpeg.av_q2d(videoStream->r_frame_rate);
+        Debug.LogError("FrameRate:" + FrameRate);
         FrameWidth = codecContext->width;
         FrameHeight = codecContext->height;
-        Debug.LogWarning(FrameWidth + " " + FrameHeight);
         frameDuration = TimeSpan.FromMilliseconds(1000 / FrameRate);
         //初始化转换器，将图片从源格式 转换成 BGR0 （8:8:8）格式 
         var result = InitConvert(FrameWidth, FrameHeight, codecContext->pix_fmt, FrameWidth, FrameHeight, AVPixelFormat.AV_PIX_FMT_BGR0);
@@ -170,6 +178,7 @@ public unsafe class VideoDecoder : IMedia
         ffmpeg.av_image_fill_arrays(ref TargetData, ref TargetLinesize, (byte*)FrameBufferPtr, targetFormat, targetWidth, targetHeight, 1);
         return true;
     }
+
     byte[] bytes;
     public byte[] FrameConvertBytes(AVFrame* sourceFrame)
     {
@@ -177,14 +186,15 @@ public unsafe class VideoDecoder : IMedia
         ffmpeg.sws_scale(convert, sourceFrame->data,
             sourceFrame->linesize, 0, sourceFrame->height,
             TargetData, TargetLinesize);
-        
-        bpa.UpdateFrom(TargetData); 
+
+        bpa.UpdateFrom(TargetData);
         linesize.UpdateFrom(TargetLinesize);
         //创建一个字节数据，将转换后的数据从内存中读取成字节数组 
         //byte[] bytes = new byte[FrameWidth * FrameHeight * 4];
         Marshal.Copy((IntPtr)bpa[0], bytes, 0, bytes.Length);
         return bytes;
     }
+
     public bool TryReadNextFrame(out AVFrame outFrame)
     {
         if (lastTime == TimeSpan.Zero)
@@ -200,7 +210,7 @@ public unsafe class VideoDecoder : IMedia
                 isNextFrame = true;
             }
             else
-            { 
+            {
                 outFrame = *frame;
                 return false;
             }
@@ -209,7 +219,7 @@ public unsafe class VideoDecoder : IMedia
         {
             lock (SyncLock)
             {
-                int result = -1; 
+                int result = -1;
                 while (true)
                 {
                     //清理上一帧的数据
@@ -286,6 +296,7 @@ public unsafe class VideoDecoder : IMedia
             MediaCompleted?.Invoke(Duration);
         }
     }
+
     /// <summary>
     /// 更改进度
     /// </summary>
@@ -293,7 +304,7 @@ public unsafe class VideoDecoder : IMedia
     public void SeekProgress(int seekTime)
     {
         if (format == null || videoStream == null)
-        { 
+        {
             return;
         }
         lock (SyncLock)
@@ -329,30 +340,37 @@ public unsafe class VideoDecoder : IMedia
             lastTime = TimeSpan.Zero;
         }
     }
+
     public void Play()
     {
         if (State == MediaState.Play)
+        { 
             return;
+        } 
         clock.Start();
         IsPlaying = true;
         State = MediaState.Play;
-
     }
+
     public void Pause()
     {
         if (State != MediaState.Play)
+        {
             return;
+        }
         IsPlaying = false;
         OffsetClock = clock.Elapsed;
         clock.Stop();
         clock.Reset();
-
         State = MediaState.Pause;
     }
+
     public void Stop()
     {
         if (State == MediaState.None)
+        {
             return;
+        }
         StopPlay();
     }
 }

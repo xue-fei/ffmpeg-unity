@@ -29,7 +29,7 @@ namespace FFmpeg.AutoGen
                 var printPrefix = 1;
                 ffmpeg.av_log_format_line(p0, level, format, vl, lineBuffer, lineSize, &printPrefix);
                 var line = Marshal.PtrToStringAnsi((IntPtr)lineBuffer);
-                Debug.LogWarning(line);
+                Debug.Log(line);
             };
             ffmpeg.av_log_set_callback(logCallback);
         }
@@ -72,7 +72,7 @@ namespace FFmpeg.AutoGen
             {
                 decoderNumber = availableHWDecoders.First().Key;
             }
-            Debug.LogWarning($"Selected [{decoderNumber}]");
+            Debug.Log($"Selected [{decoderNumber}]");
             availableHWDecoders.TryGetValue(decoderNumber, out deviceType);
             return deviceType;
         }
