@@ -6,6 +6,8 @@ using UnityEngine.Events;
 using UnityEngine.EventSystems;
 using UnityEngine.UI;
 using NAudio.Wave;
+using System.IO;
+using UnityEditor;
 
 public class NewPlayer : MonoBehaviour
 {
@@ -23,9 +25,20 @@ public class NewPlayer : MonoBehaviour
     public Slider slider;
     public Text text;
 
+    //string url = "http://39.134.115.163:8080/PLTV/88888910/224/3221225632/index.m3u8";
+    string url = Application.streamingAssetsPath + "/test.mp4";
+
     // Start is called before the first frame update
     void Start()
     {
+        if (!File.Exists(url))
+        {
+            Debug.LogError(url + " 文件不存在");
+#if UNITY_EDITOR
+            EditorApplication.isPlaying = false;
+#endif
+            return;
+        }
         Application.targetFrameRate = 30;
         ct = cts.Token;
         Loom.Initialize();
@@ -49,10 +62,7 @@ public class NewPlayer : MonoBehaviour
     }
 
     unsafe void Play()
-    {
-        //var url = "http://39.134.115.163:8080/PLTV/88888910/224/3221225632/index.m3u8";
-        var url = Application.streamingAssetsPath + "/test.mp4";
-
+    {  
         audioDecoder.InitDecodecAudio(url);
         audioDecoder.Play();
 
@@ -131,8 +141,11 @@ public class NewPlayer : MonoBehaviour
             audioDecoder.Stop();
         }
         cts.Cancel();
-        waveOut.Stop();
-        waveOut.Dispose();
+        if (waveOut != null)
+        {
+            waveOut.Stop();
+            waveOut.Dispose();
+        }
     }
 
     void OnDrag(BaseEventData data)
