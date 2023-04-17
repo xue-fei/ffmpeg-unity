@@ -237,18 +237,21 @@ public unsafe class AudioDecoder : IMedia
             OffsetClock = TimeSpan.FromSeconds(0);
             clock.Reset();
             clock.Stop();
-            var tempFormat = format;
-            ffmpeg.avformat_free_context(tempFormat);
-            format = null;
-            var tempCodecContext = codecContext;
-            ffmpeg.avcodec_free_context(&tempCodecContext);
-            var tempPacket = packet;
-            ffmpeg.av_packet_free(&tempPacket);
-            var tempFrame = frame;
-            ffmpeg.av_frame_free(&tempFrame);
+
+            ffmpeg.av_frame_unref(frame);
+            ffmpeg.av_free(frame);
+
+            ffmpeg.av_packet_unref(packet);
+            ffmpeg.av_free(packet);
+
+            ffmpeg.avcodec_close(codecContext);
+
             var tempConvert = convert;
             ffmpeg.swr_free(&tempConvert);
 
+            var tempFormat = format;
+            ffmpeg.avformat_close_input(&tempFormat);
+             
             Marshal.FreeHGlobal(audioBuffer);
             bufferPtr = null;
 
