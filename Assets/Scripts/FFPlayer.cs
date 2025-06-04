@@ -1,12 +1,15 @@
 using FFmpeg.AutoGen;
 using FFmpeg.AutoGen.Example;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
 using UnityEngine;
+using Debug = UnityEngine.Debug;
 
 namespace UnityFFmpeg
 {
@@ -43,7 +46,25 @@ namespace UnityFFmpeg
         private Action<byte[]> _onAudioData;
         private Action<int, int> _onVideoSize;
 
+        // 新增同步相关字段
+        private double _audioClock;              // 音频主时钟（秒）
+        private double _videoClock;               // 视频时钟（秒）
+        private double _frameTimer;               // 上一帧显示时间
+        private double _frameDelay;               // 帧间延迟（基于帧率）
+        private bool _useAudioClock = true;       // 是否使用音频时钟作为主时钟
+        private readonly object _clockLock = new object();
+
+        // 帧队列
+        private ConcurrentQueue<AVFrameHolder> _videoFrameQueue = new ConcurrentQueue<AVFrameHolder>();
+        private const int MAX_VIDEO_QUEUE_SIZE = 5; // 视频帧队列最大长度
+        private ManualResetEvent _frameReadyEvent = new ManualResetEvent(false);
+
+        // 音频相关
+        private double _audioPts;                 // 当前音频帧的PTS
+        private double _audioStartTime;            // 音频开始时间
+
         Thread thread = null;
+        Thread renderThread;
 
         public FFPlayer(string url, Action<int, int> onVideoSize, Action<byte[]> onVideoData, Action<byte[]> onAudioData)
         {
@@ -87,28 +108,28 @@ namespace UnityFFmpeg
             _pixelFormat = _pVideoContext->pix_fmt;
             _sample_fmt = _pVideoContext->sample_fmt;
 
-            //frame->16bit 44100 PCM ͳһ��Ƶ������ʽ�������
-            //����swrcontext�����ļ�
+            //frame->16bit 44100 PCM 统一音频采样格式与采样率
+            //创建swrcontext上下文件
             _audioSwrContext = ffmpeg.swr_alloc();
-            //��Ƶ��ʽ  ����Ĳ������ò���
+            //音频格式  输入的采样设置参数
             AVSampleFormat inFormat = _pAudioContext->sample_fmt;
-            // ����Ĳ�����ʽ
+            // 出入的采样格式
             outFormat = AVSampleFormat.AV_SAMPLE_FMT_S16;
-            // ���������
+            // 输入采样率
             int inSampleRate = _pAudioContext->sample_rate;
-            // ���������
+            // 输出采样率
             int outSampleRate = 44100;
-            // ������������
+            // 输入声道布局
             ulong in_ch_layout = _pAudioContext->channel_layout;
-            //�����������
+            //输出声道布局
             int out_ch_layout = ffmpeg.AV_CH_LAYOUT_STEREO;
-            //��Swrcontext ����ռ䣬���ù�������
+            //给Swrcontext 分配空间，设置公共参数
             ffmpeg.swr_alloc_set_opts(_audioSwrContext, out_ch_layout, outFormat, outSampleRate,
                     (long)in_ch_layout, inFormat, inSampleRate, 0, null
                     );
-            // ��ʼ��
+            // 初始化
             ffmpeg.swr_init(_audioSwrContext);
-            // ��ȡ��������
+            // 获取声道数量
             outChannelCount = ffmpeg.av_get_channel_layout_nb_channels((ulong)out_ch_layout);
 
             _packet = ffmpeg.av_packet_alloc();
@@ -116,9 +137,20 @@ namespace UnityFFmpeg
             _videoFrame = ffmpeg.av_frame_alloc();
             _g2cFrame = ffmpeg.av_frame_alloc();
 
-            thread = new Thread(new ThreadStart(DecodeTest));
+            // 初始化同步变量
+            _audioClock = 0;
+            _videoClock = 0;
+            _frameTimer = 0;
+            _frameDelay = 1.0 / 30; // 默认30fps
+
+            thread = new Thread(new ThreadStart(DecodeThread));
             thread.IsBackground = true;
             thread.Start();
+
+            // 启动视频渲染线程
+            renderThread = new Thread(new ThreadStart(RenderThread));
+            renderThread.IsBackground = true;
+            renderThread.Start();
         }
 
         private void Init()
@@ -131,88 +163,229 @@ namespace UnityFFmpeg
 
         bool isVideo;
 
-        private void DecodeTest()
+        private void DecodeThread()
         {
             while (true)
             {
-                ffmpeg.av_frame_unref(_audioFrame);
-                ffmpeg.av_frame_unref(_videoFrame);
-
-                do
+                // 1. 读取数据包
+                error = ffmpeg.av_read_frame(_pFormatContext, _packet);
+                if (error == ffmpeg.AVERROR_EOF)
                 {
-                    //��ʼ��ȡԴ�ļ������н���
-                    error = ffmpeg.av_read_frame(_pFormatContext, _packet);
-                    if (error == ffmpeg.AVERROR_EOF)
-                    {
-                        Debug.LogWarning("over");
-                        break;
-                    }
-                    if (_packet->stream_index == _audioStreamIndex)
-                    {
-                        error = ffmpeg.avcodec_send_packet(_pAudioContext, _packet);
-                        //����
-                        error = ffmpeg.avcodec_receive_frame(_pAudioContext, _audioFrame);
+                    Debug.LogWarning("End of file reached");
+                    break;
+                }
 
-                        isVideo = false;
-                    }
-                    else if (_packet->stream_index == _videoStreamIndex)
-                    {
-                        error = ffmpeg.avcodec_send_packet(_pVideoContext, _packet);
-                        //����
-                        error = ffmpeg.avcodec_receive_frame(_pVideoContext, _videoFrame);
+                // 2. 处理音频包
+                if (_packet->stream_index == _audioStreamIndex)
+                {
+                    ProcessAudioPacket();
+                }
+                // 3. 处理视频包
+                else if (_packet->stream_index == _videoStreamIndex)
+                {
+                    ProcessVideoPacket();
+                }
 
-                        isVideo = true;
+                ffmpeg.av_packet_unref(_packet);
+            }
+        }
+
+        private void ProcessAudioPacket()
+        {
+            // 发送数据包到解码器
+            error = ffmpeg.avcodec_send_packet(_pAudioContext, _packet);
+            if (error < 0) return;
+
+            // 接收解码后的帧
+            while (ffmpeg.avcodec_receive_frame(_pAudioContext, _audioFrame) >= 0)
+            {
+                // 计算音频PTS（秒）
+                double pts = _audioFrame->best_effort_timestamp *
+                            ffmpeg.av_q2d(_pFormatContext->streams[_audioStreamIndex]->time_base);
+
+                // 更新音频时钟
+                lock (_clockLock)
+                {
+                    _audioClock = pts;
+
+                    // 如果是第一帧，设置音频开始时间
+                    if (_audioStartTime == 0)
+                    {
+                        _audioStartTime = pts;
                     }
                 }
-                while (error == ffmpeg.AVERROR(ffmpeg.EAGAIN));
-                if (!isVideo)
+
+                // 音频重采样
+                byte* out_buffer = (byte*)Marshal.AllocHGlobal(2 * 44100);
+                ffmpeg.swr_convert(_audioSwrContext, &out_buffer, 2 * 44100,
+                                  (byte**)&_audioFrame->data, _audioFrame->nb_samples);
+
+                int out_buffer_size = ffmpeg.av_samples_get_buffer_size(null, outChannelCount,
+                                                                      _audioFrame->nb_samples, outFormat, 1);
+                if (out_buffer_size > 0)
                 {
-                    byte* out_buffer = (byte*)Marshal.AllocHGlobal(2 * 44100);
-                    //��ÿһ֡����ת����pcm
-                    ffmpeg.swr_convert(_audioSwrContext, &out_buffer, 2 * 44100, (byte**)&_audioFrame->data, _audioFrame->nb_samples);
-                    //��ȡʵ�ʵĻ����С
-                    int out_buffer_size = ffmpeg.av_samples_get_buffer_size(null, outChannelCount, _audioFrame->nb_samples, outFormat, 1);
-                    if (out_buffer_size > 0)
-                    {
-                        byte[] data = new byte[out_buffer_size];
-                        Marshal.Copy((IntPtr)out_buffer, data, 0, out_buffer_size);
-                        if (_onAudioData != null)
-                        {
-                            _onAudioData(data);
-                        }
-                    }
-                    else
-                    {
-                        Debug.LogWarning("out_buffer_size:" + out_buffer_size);
-                    }
-                    Marshal.FreeCoTaskMem((IntPtr)out_buffer);
+                    byte[] data = new byte[out_buffer_size];
+                    Marshal.Copy((IntPtr)out_buffer, data, 0, out_buffer_size);
+                    _onAudioData?.Invoke(data);
                 }
-                if (isVideo)
+
+                Marshal.FreeHGlobal((IntPtr)out_buffer);
+            }
+        }
+
+        private void ProcessVideoPacket()
+        {
+            // 发送数据包到解码器
+            error = ffmpeg.avcodec_send_packet(_pVideoContext, _packet);
+            if (error < 0) return;
+
+            // 接收解码后的帧
+            while (ffmpeg.avcodec_receive_frame(_pVideoContext, _videoFrame) >= 0)
+            {
+                // 计算视频PTS（秒）
+                double pts = _videoFrame->best_effort_timestamp *
+                            ffmpeg.av_q2d(_pFormatContext->streams[_videoStreamIndex]->time_base);
+
+                // 更新视频时钟
+                lock (_clockLock)
                 {
-                    if (_pVideoContext->hw_device_ctx != null)
+                    _videoClock = pts;
+                }
+
+                // 将帧加入队列
+                if (_videoFrameQueue.Count < MAX_VIDEO_QUEUE_SIZE)
+                {
+                    var frameHolder = new AVFrameHolder(_videoFrame, pts, _frameSize, _pixelFormat);
+                    _videoFrameQueue.Enqueue(frameHolder);
+                    _frameReadyEvent.Set();
+                }
+                else
+                {
+                    // 队列满时丢弃最旧帧
+                    Debug.LogWarning("Video queue full, dropping frame");
+                }
+            }
+        }
+
+        // 新增：视频渲染线程
+        private void RenderThread()
+        {
+            while (true)
+            {
+                // 等待帧可用
+                _frameReadyEvent.WaitOne();
+
+                if (_videoFrameQueue.TryDequeue(out AVFrameHolder frameHolder))
+                {
+                    // 计算显示延迟
+                    double delay = CalculateFrameDelay(frameHolder.Pts);
+
+                    // 等待到正确显示时间
+                    if (delay > 0)
                     {
-                        ffmpeg.av_hwframe_transfer_data(_g2cFrame, _videoFrame, 0).ThrowExceptionIfError();
-                        _tempFrame = *_g2cFrame;
+                        Thread.Sleep((int)(delay * 1000));
                     }
-                    else
+
+                    // 转换并显示帧
+                    DisplayVideoFrame(frameHolder);
+
+                    // 释放帧资源
+                    frameHolder.Dispose();
+
+                    // 如果没有更多帧，重置事件
+                    if (_videoFrameQueue.IsEmpty)
                     {
-                        _tempFrame = *_videoFrame;
-                    }
-                    var sourcePixelFormat = GetHWPixelFormat(deviceType);
-                    using (var vfc = new VideoFrameConverter(_frameSize, sourcePixelFormat, _frameSize, destinationPixelFormat))
-                    {
-                        AVFrame convertedFrame = vfc.Convert(_tempFrame);
-                        IntPtr imgPtr = (IntPtr)convertedFrame.data[0];
-                        int dataLen = _frameSize.Width * _frameSize.Height * 3;
-                        byte[] data = new byte[dataLen];
-                        Marshal.Copy((IntPtr)convertedFrame.data[0], data, 0, data.Length);
-                        if (_onVideoData != null)
-                        {
-                            _onVideoData(data);
-                        }
-                        Marshal.FreeCoTaskMem(imgPtr);
+                        _frameReadyEvent.Reset();
                     }
                 }
+            }
+        }
+
+        // 计算帧显示延迟
+        private double CalculateFrameDelay(double pts)
+        {
+            double actualDelay, delay;
+
+            // 计算帧间延迟（基于帧率）
+            double timeSinceLastFrame = GetCurrentTime() - _frameTimer;
+            delay = _frameDelay - timeSinceLastFrame;
+
+            // 计算参考时间（音频时钟或系统时钟）
+            double refClock = _useAudioClock ?
+                GetAudioClock() :
+                GetCurrentTime() - _audioStartTime;
+
+            // 计算当前帧应显示的时间差
+            double diff = pts - refClock;
+
+            // 同步阈值（50ms）
+            const double syncThreshold = 0.05;
+
+            // 调整延迟以同步
+            if (Math.Abs(diff) < syncThreshold)
+            {
+                // 在阈值内，使用计算的延迟
+                actualDelay = delay;
+            }
+            else if (diff > 0)
+            {
+                // 视频落后，减少延迟
+                actualDelay = Math.Max(0, delay + diff);
+            }
+            else
+            {
+                // 视频超前，增加延迟
+                actualDelay = delay + diff;
+            }
+
+            // 更新帧计时器
+            _frameTimer = GetCurrentTime();
+
+            // 限制延迟在合理范围内
+            actualDelay = Math.Max(0, Math.Min(actualDelay, 0.5));
+
+            return actualDelay;
+        }
+
+        // 获取当前音频时钟
+        private double GetAudioClock()
+        {
+            lock (_clockLock)
+            {
+                return _audioClock;
+            }
+        }
+
+        // 获取当前时间（秒）
+        private double GetCurrentTime()
+        {
+            return Stopwatch.GetTimestamp() / (double)Stopwatch.Frequency;
+        }
+
+        // 显示视频帧
+        private unsafe void DisplayVideoFrame(AVFrameHolder frameHolder)
+        {
+            AVFrame* frame = frameHolder.Frame;
+
+            if (_pVideoContext->hw_device_ctx != null)
+            {
+                ffmpeg.av_hwframe_transfer_data(_g2cFrame, frame, 0).ThrowExceptionIfError();
+                _tempFrame = *_g2cFrame;
+            }
+            else
+            {
+                _tempFrame = *frame;
+            }
+
+            var sourcePixelFormat = GetHWPixelFormat(deviceType);
+            using (var vfc = new VideoFrameConverter(frameHolder.FrameSize, sourcePixelFormat,
+                                                   frameHolder.FrameSize, destinationPixelFormat))
+            {
+                AVFrame convertedFrame = vfc.Convert(_tempFrame);
+                int dataLen = frameHolder.FrameSize.Width * frameHolder.FrameSize.Height * 3;
+                byte[] data = new byte[dataLen];
+                Marshal.Copy((IntPtr)convertedFrame.data[0], data, 0, dataLen);
+                _onVideoData?.Invoke(data);
             }
         }
 
@@ -303,6 +476,20 @@ namespace UnityFFmpeg
                 {
                     thread.Abort();
                 }
+
+                // 清理帧队列
+                while (_videoFrameQueue.TryDequeue(out AVFrameHolder frameHolder))
+                {
+                    frameHolder.Dispose();
+                }
+
+                if (renderThread != null)
+                {
+                    if (renderThread.IsAlive)
+                    {
+                        renderThread.Abort();
+                    }
+                }
             }
 
             ffmpeg.avcodec_close(_pVideoContext);
@@ -322,6 +509,34 @@ namespace UnityFFmpeg
 
             ffmpeg.av_packet_unref(_packet);
             ffmpeg.av_free(_packet);
+        }
+    }
+
+    // 新增：AVFrame包装器，用于存储帧及其时间戳
+    public unsafe class AVFrameHolder : IDisposable
+    {
+        public AVFrame* Frame { get; private set; }
+        public double Pts { get; private set; }
+        public Size FrameSize { get; private set; }
+        public AVPixelFormat PixelFormat { get; private set; }
+
+        public AVFrameHolder(AVFrame* frame, double pts, Size frameSize, AVPixelFormat pixelFormat)
+        {
+            Frame = ffmpeg.av_frame_alloc();
+            ffmpeg.av_frame_ref(Frame, frame);
+            Pts = pts;
+            FrameSize = frameSize;
+            PixelFormat = pixelFormat;
+        }
+
+        public void Dispose()
+        {
+            if (Frame != null)
+            {
+                ffmpeg.av_frame_unref(Frame);
+                //ffmpeg.av_frame_free(Frame);
+                Frame = null;
+            }
         }
     }
 }
