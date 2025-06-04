@@ -11,7 +11,7 @@ public class TestPlayer : MonoBehaviour
     public RawImage rawImage;
     FFPlayer ffPlayer;
 
-    float frameRate = 0.0416f;
+    float frameRate = 0.033f;
     float nextFrame = 0.0f;
 
     // Start is called before the first frame update

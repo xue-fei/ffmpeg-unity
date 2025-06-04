@@ -56,7 +56,7 @@ namespace UnityFFmpeg
 
         // 帧队列
         private ConcurrentQueue<AVFrameHolder> _videoFrameQueue = new ConcurrentQueue<AVFrameHolder>();
-        private const int MAX_VIDEO_QUEUE_SIZE = 5; // 视频帧队列最大长度
+        private const int MAX_VIDEO_QUEUE_SIZE = 15; // 视频帧队列最大长度
         private ManualResetEvent _frameReadyEvent = new ManualResetEvent(false);
 
         // 音频相关
@@ -167,6 +167,10 @@ namespace UnityFFmpeg
         {
             while (true)
             {
+                if(_videoFrameQueue.Count >= MAX_VIDEO_QUEUE_SIZE)
+                {
+                    Thread.Sleep(10);
+                }
                 // 1. 读取数据包
                 error = ffmpeg.av_read_frame(_pFormatContext, _packet);
                 if (error == ffmpeg.AVERROR_EOF)
