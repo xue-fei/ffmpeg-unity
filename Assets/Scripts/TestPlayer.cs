@@ -12,7 +12,7 @@ public class TestPlayer : MonoBehaviour
     public AspectRatioFitter aspectRatioFitter;
     FFPlayer ffPlayer;
 
-    float frameRate = 0.04f; // 25fps
+    float frameDely = 0.04f; // 25fps
     float nextFrame = 0.0f;
     bool textureReady = false;
 
@@ -51,7 +51,7 @@ public class TestPlayer : MonoBehaviour
     {
         if (Time.time >= nextFrame)
         {
-            nextFrame = Time.time + frameRate;
+            nextFrame = Time.time + frameDely;
 
             if (imgQueue.Count > 0 && textureReady)
             {
@@ -74,11 +74,12 @@ public class TestPlayer : MonoBehaviour
         }
     }
 
-    private void OnVideoSize(int width, int height)
+    private void OnVideoSize(int width, int height, float frameRate)
     {
         Loom.QueueOnMainThread(() =>
         {
             Debug.Log($"视频尺寸: {width}x{height}");
+            frameDely = 1f / frameRate;
             if (width > 0 && height > 0)
             {
                 texture2D = new Texture2D(width, height, TextureFormat.RGB24, false);
@@ -88,7 +89,7 @@ public class TestPlayer : MonoBehaviour
                 if (aspectRatioFitter != null)
                 {
                     aspectRatioFitter.aspectRatio = (float)width / height;
-                } 
+                }
                 textureReady = true;
             }
         });
@@ -117,18 +118,18 @@ public class TestPlayer : MonoBehaviour
                 audioQueue.Enqueue(data);
             }
 
-            Loom.QueueOnMainThread(() =>
-            {
-                // 如果还没有创建AudioClip，创建它
-                if (audioClip == null)
-                {
-                    // 创建一个足够大的AudioClip来存储音频数据
-                    audioClip = AudioClip.Create("StreamingAudio", audioSampleRate * 10, audioChannels, audioSampleRate, false);
-                    audioSource.clip = audioClip;
-                    audioSource.loop = false;
-                    audioSource.Play();
-                }
-            });
+            //Loom.QueueOnMainThread(() =>
+            //{
+            //    // 如果还没有创建AudioClip，创建它
+            //    if (audioClip == null)
+            //    {
+            //        // 创建一个足够大的AudioClip来存储音频数据
+            //        audioClip = AudioClip.Create("StreamingAudio", audioSampleRate * 10, audioChannels, audioSampleRate, false);
+            //        audioSource.clip = audioClip;
+            //        audioSource.loop = false;
+            //        audioSource.Play();
+            //    }
+            //});
         }
     }
 

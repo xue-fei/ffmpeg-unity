@@ -42,7 +42,7 @@ namespace UnityFFmpeg
 
         private Action<byte[]> _onVideoData;
         private Action<byte[]> _onAudioData;
-        private Action<int, int> _onVideoSize;
+        private Action<int, int, float> _onVideoSize;
 
         // 同步相关字段
         private double _audioClock;
@@ -63,7 +63,7 @@ namespace UnityFFmpeg
         private bool _audioStarted = false;
 
         // 视频帧率相关
-        private double _videoFrameRate;
+        private float _videoFrameRate;
         private double _frameDuration;
         private double _lastVideoPts = -1;
 
@@ -82,7 +82,7 @@ namespace UnityFFmpeg
         private int _droppedFrames = 0;
         private int _renderedFrames = 0;
 
-        public FFPlayer(string url, Action<int, int> onVideoSize, Action<byte[]> onVideoData, Action<byte[]> onAudioData)
+        public FFPlayer(string url, Action<int, int, float> onVideoSize, Action<byte[]> onVideoData, Action<byte[]> onAudioData)
         {
             _url = url;
             _onVideoSize += onVideoSize;
@@ -127,14 +127,14 @@ namespace UnityFFmpeg
 
             if (frameRate.num != 0 && frameRate.den != 0)
             {
-                _videoFrameRate = (double)frameRate.num / frameRate.den;
+                _videoFrameRate = frameRate.num / frameRate.den;
                 _frameDuration = 1.0 / _videoFrameRate;
                 _frameDelay = _frameDuration;
                 Debug.Log($"视频帧率: {_videoFrameRate:F2} FPS, 帧间隔: {_frameDuration:F3}秒");
             }
             else
             {
-                _videoFrameRate = 25.0;
+                _videoFrameRate = 25.0f;
                 _frameDuration = 0.04;
                 _frameDelay = 0.04;
                 Debug.LogWarning("无法获取帧率，使用默认值: 25 FPS");
@@ -143,7 +143,7 @@ namespace UnityFFmpeg
             _frameSize = new Size(_pVideoContext->width, _pVideoContext->height);
             if (_onVideoSize != null)
             {
-                _onVideoSize(_frameSize.Width, _frameSize.Height);
+                _onVideoSize(_frameSize.Width, _frameSize.Height, _videoFrameRate);
             }
 
             _pixelFormat = _pVideoContext->pix_fmt;
@@ -309,12 +309,12 @@ namespace UnityFFmpeg
                     int maxOutputSize = 2 * 44100;
                     byte* out_buffer = stackalloc byte[maxOutputSize];
 
-                    int convertedSamples = ffmpeg.swr_convert(_audioSwrContext, &out_buffer, 2 * 44100,
+                    int convertedSamples = ffmpeg.swr_convert(_audioSwrContext, &out_buffer, maxOutputSize,
                                       (byte**)&_audioFrame->data, _audioFrame->nb_samples);
 
                     int out_buffer_size = ffmpeg.av_samples_get_buffer_size(null, outChannelCount,
                                                                           convertedSamples, outFormat, 1);
-
+                    Debug.LogWarning("out_buffer_size:" + out_buffer_size);
                     if (out_buffer_size > 0 && out_buffer_size <= maxOutputSize)
                     {
                         // 从对象池获取缓冲区
