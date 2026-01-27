@@ -11,13 +11,14 @@ public class TestPlayer : MonoBehaviour
     public RawImage rawImage;
     FFPlayer ffPlayer;
 
-    float frameRate = 0.033f;
+    float frameRate = 0.02f;
     float nextFrame = 0.0f;
 
     // Start is called before the first frame update
     void Start()
     {
-        var url = "http://devimages.apple.com.edgekey.net/streaming/examples/bipbop_4x3/gear2/prog_index.m3u8";
+        var url = "http://demo-videos.qnsdk.com/bbk-H265-50fps.mp4";
+        //var url = "http://devimages.apple.com.edgekey.net/streaming/examples/bipbop_4x3/gear2/prog_index.m3u8";
         //var url = "rtmp://58.200.131.2:1935/livetv/hunantv";
         //var url = Application.streamingAssetsPath + "/test.mp4";
         ffPlayer = new FFPlayer(url, OnVideoSize, OnVideoData, OAudioData);
@@ -27,7 +28,7 @@ public class TestPlayer : MonoBehaviour
     // Update is called once per frame
     void Update()
     {
-        if(Time.time > nextFrame)
+        if (Time.time > nextFrame)
         {
             nextFrame = Time.time + frameRate;
             if (imgQueue.Count > 0)
@@ -67,9 +68,14 @@ public class TestPlayer : MonoBehaviour
         {
             bsBuffer = audioQueue.Dequeue();
             float[] _buffer = ByteArrayToFloatArray(bsBuffer, bsBuffer.Length);
-            for (int i = 0; i < data.Length; i++)
+            //Debug.Log("data.Length:" + data.Length);
+            //Debug.Log("_buffer.Length:" + _buffer.Length);
+            if (_buffer.Length == data.Length)
             {
-                data[i] = _buffer[i];
+                for (int i = 0; i < data.Length; i++)
+                {
+                    data[i] = _buffer[i];
+                }
             }
         }
     }
