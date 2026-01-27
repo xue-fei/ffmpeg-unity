@@ -17,8 +17,9 @@ public class TestPlayer : MonoBehaviour
     // Start is called before the first frame update
     void Start()
     {
+        var url = "http://devimages.apple.com.edgekey.net/streaming/examples/bipbop_4x3/gear2/prog_index.m3u8";
         //var url = "rtmp://58.200.131.2:1935/livetv/hunantv";
-        var url = Application.streamingAssetsPath + "/test.mp4";
+        //var url = Application.streamingAssetsPath + "/test.mp4";
         ffPlayer = new FFPlayer(url, OnVideoSize, OnVideoData, OAudioData);
     }
 
