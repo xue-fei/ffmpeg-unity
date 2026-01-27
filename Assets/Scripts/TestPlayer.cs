@@ -9,6 +9,7 @@ public class TestPlayer : MonoBehaviour
     Queue<byte[]> imgQueue = new Queue<byte[]>();
     Queue<byte[]> audioQueue = new Queue<byte[]>();
     public RawImage rawImage;
+    public AspectRatioFitter aspectRatioFitter;
     FFPlayer ffPlayer;
 
     float frameRate = 0.04f; // 25fps
@@ -84,11 +85,10 @@ public class TestPlayer : MonoBehaviour
                 texture2D.Apply();
                 rawImage.texture = texture2D;
 
-                // 调整RawImage的尺寸
-                RectTransform rt = rawImage.GetComponent<RectTransform>();
-                float aspectRatio = (float)width / height;
-                rt.sizeDelta = new Vector2(rt.sizeDelta.x, rt.sizeDelta.x / aspectRatio);
-
+                if (aspectRatioFitter != null)
+                {
+                    aspectRatioFitter.aspectRatio = (float)width / height;
+                } 
                 textureReady = true;
             }
         });
