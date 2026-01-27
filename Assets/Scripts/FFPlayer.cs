@@ -2,10 +2,8 @@ using FFmpeg.AutoGen;
 using FFmpeg.AutoGen.Example;
 using System;
 using System.Collections.Concurrent;
-using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
-using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
 using UnityEngine;
@@ -61,7 +59,13 @@ namespace UnityFFmpeg
 
         // 音频相关
         private double _audioPts;
-        private double _audioStartTime;
+        private double _audioStartPts = 0;
+        private bool _audioStarted = false;
+
+        // 视频帧率相关
+        private double _videoFrameRate;
+        private double _frameDuration;
+        private double _lastVideoPts = -1;
 
         // 线程控制 - 添加停止标志
         Thread thread = null;
@@ -72,6 +76,11 @@ namespace UnityFFmpeg
         // 对象池，复用byte数组以减少GC压力
         private ObjectPool<byte[]> _audioBufferPool;
         private ObjectPool<byte[]> _videoBufferPool;
+
+        // 性能监控
+        private Stopwatch _renderStopwatch = new Stopwatch();
+        private int _droppedFrames = 0;
+        private int _renderedFrames = 0;
 
         public FFPlayer(string url, Action<int, int> onVideoSize, Action<byte[]> onVideoData, Action<byte[]> onAudioData)
         {
@@ -92,11 +101,10 @@ namespace UnityFFmpeg
             AVCodec* audioCodec = null;
             _audioStreamIndex = ffmpeg.av_find_best_stream(_pFormatContext, AVMediaType.AVMEDIA_TYPE_AUDIO, -1, -1, &audioCodec, 0).ThrowExceptionIfError();
 
-            Debug.LogWarning("_videoStreamIndex:" + _videoStreamIndex);
-            Debug.LogWarning("_audioStreamIndex:" + _audioStreamIndex);
+            Debug.Log($"视频流索引: {_videoStreamIndex}, 音频流索引: {_audioStreamIndex}");
 
             _pVideoContext = ffmpeg.avcodec_alloc_context3(videoCodec);
-            Debug.LogWarning("deviceType:" + deviceType);
+            Debug.Log($"硬件解码器类型: {deviceType}");
 
             if (deviceType != AVHWDeviceType.AV_HWDEVICE_TYPE_NONE)
             {
@@ -113,35 +121,25 @@ namespace UnityFFmpeg
             ffmpeg.avcodec_open2(_pVideoContext, videoCodec, null).ThrowExceptionIfError();
             ffmpeg.avcodec_open2(_pAudioContext, audioCodec, null).ThrowExceptionIfError();
 
-
-            float _videoFrameRate=0;
+            // 使用av_guess_frame_rate获取准确的视频帧率
             AVStream* videoStream = _pFormatContext->streams[_videoStreamIndex];
-            AVRational frameRate = videoStream->r_frame_rate;
-            if (frameRate.den != 0)
+            AVRational frameRate = ffmpeg.av_guess_frame_rate(_pFormatContext, videoStream, null);
+
+            if (frameRate.num != 0 && frameRate.den != 0)
             {
-                _videoFrameRate = frameRate.num / frameRate.den;
+                _videoFrameRate = (double)frameRate.num / frameRate.den;
+                _frameDuration = 1.0 / _videoFrameRate;
+                _frameDelay = _frameDuration;
+                Debug.Log($"视频帧率: {_videoFrameRate:F2} FPS, 帧间隔: {_frameDuration:F3}秒");
+            }
+            else
+            {
+                _videoFrameRate = 25.0;
+                _frameDuration = 0.04;
+                _frameDelay = 0.04;
+                Debug.LogWarning("无法获取帧率，使用默认值: 25 FPS");
             }
 
-            // 方法2：如果r_frame_rate无效，尝试从avg_frame_rate
-            if (_videoFrameRate <= 0 && videoStream->avg_frame_rate.den != 0)
-            {
-                _videoFrameRate = videoStream->avg_frame_rate.num / videoStream->avg_frame_rate.den;
-            }
-
-            // 方法3：如果还是无效，从时间基准估算
-            if (_videoFrameRate <= 0 && videoStream->time_base.num != 0)
-            {
-                _videoFrameRate = videoStream->time_base.den / videoStream->time_base.num;
-            }
-
-            // 默认值：如果仍然无效则使用30fps
-            if (_videoFrameRate <= 0)
-            {
-                _videoFrameRate = 30.0f;
-                Debug.LogWarning($"无法获取帧率，使用默认值: 30 FPS");
-            }
-            Debug.LogWarning("_videoFrameRate:" + _videoFrameRate);
-             
             _frameSize = new Size(_pVideoContext->width, _pVideoContext->height);
             if (_onVideoSize != null)
             {
@@ -156,8 +154,8 @@ namespace UnityFFmpeg
 
             // 初始化对象池
             int videoBufferSize = _frameSize.Width * _frameSize.Height * 3;
-            _videoBufferPool = new ObjectPool<byte[]>(() => new byte[videoBufferSize], 3);
-            _audioBufferPool = new ObjectPool<byte[]>(() => new byte[2 * 44100], 3);
+            _videoBufferPool = new ObjectPool<byte[]>(() => new byte[videoBufferSize], 5);
+            _audioBufferPool = new ObjectPool<byte[]>(() => new byte[2 * 44100], 5);
 
             _packet = ffmpeg.av_packet_alloc();
             _audioFrame = ffmpeg.av_frame_alloc();
@@ -168,17 +166,20 @@ namespace UnityFFmpeg
             _audioClock = 0;
             _videoClock = 0;
             _frameTimer = 0;
-            _frameDelay = 1.0 / 30;
 
             // 启动解码线程
             thread = new Thread(new ThreadStart(DecodeThread));
             thread.IsBackground = true;
+            thread.Priority = System.Threading.ThreadPriority.BelowNormal;
             thread.Start();
 
             // 启动视频渲染线程
             renderThread = new Thread(new ThreadStart(RenderThread));
             renderThread.IsBackground = true;
+            renderThread.Priority = System.Threading.ThreadPriority.Normal;
             renderThread.Start();
+
+            _renderStopwatch.Start();
         }
 
         private void InitializeAudioContext()
@@ -203,7 +204,7 @@ namespace UnityFFmpeg
         private void Init()
         {
             ffmpeg.RootPath = Application.streamingAssetsPath + "/FFmpeg/x86_64";
-            Debug.LogWarning($"FFmpeg version info: {ffmpeg.av_version_info()}");
+            Debug.Log($"FFmpeg版本信息: {ffmpeg.av_version_info()}");
             SetupLogging();
             ConfigureHWDecoder();
         }
@@ -217,7 +218,7 @@ namespace UnityFFmpeg
                     // 队列满时暂停读取，减少内存占用
                     if (_videoFrameQueue.Count >= MAX_VIDEO_QUEUE_SIZE)
                     {
-                        Thread.Sleep(10);
+                        Thread.Sleep(5);
                         continue;
                     }
 
@@ -225,12 +226,13 @@ namespace UnityFFmpeg
                     error = ffmpeg.av_read_frame(_pFormatContext, _packet);
                     if (error == ffmpeg.AVERROR_EOF)
                     {
-                        Debug.LogWarning("End of file reached");
+                        Debug.Log("文件播放结束");
                         break;
                     }
 
                     if (error < 0)
                     {
+                        Thread.Sleep(1);
                         continue;
                     }
 
@@ -256,7 +258,7 @@ namespace UnityFFmpeg
             }
             catch (Exception ex)
             {
-                Debug.LogError($"DecodeThread Exception: {ex}");
+                Debug.LogError($"解码线程异常: {ex}");
             }
         }
 
@@ -270,27 +272,48 @@ namespace UnityFFmpeg
                 try
                 {
                     // 计算音频PTS
-                    double pts = _audioFrame->best_effort_timestamp *
-                                ffmpeg.av_q2d(_pFormatContext->streams[_audioStreamIndex]->time_base);
+                    double pts;
+                    if (_audioFrame->pts != ffmpeg.AV_NOPTS_VALUE)
+                    {
+                        pts = _audioFrame->pts *
+                              ffmpeg.av_q2d(_pFormatContext->streams[_audioStreamIndex]->time_base);
+                    }
+                    else if (_audioFrame->pkt_dts != ffmpeg.AV_NOPTS_VALUE)
+                    {
+                        pts = _audioFrame->pkt_dts *
+                              ffmpeg.av_q2d(_pFormatContext->streams[_audioStreamIndex]->time_base);
+                    }
+                    else
+                    {
+                        pts = 0;
+                    }
 
+                    // 记录第一帧音频的PTS作为基准
+                    if (!_audioStarted && pts > 0)
+                    {
+                        _audioStartPts = pts;
+                        _audioStarted = true;
+                        Debug.Log($"音频基准PTS: {_audioStartPts:F3}");
+                    }
+
+                    // 计算相对于基准的时间
+                    double currentAudioTime = pts - _audioStartPts;
+
+                    // 更新音频时钟
                     lock (_clockLock)
                     {
-                        _audioClock = pts;
-                        if (_audioStartTime == 0)
-                        {
-                            _audioStartTime = pts;
-                        }
+                        _audioClock = currentAudioTime;
                     }
 
                     // 使用栈缓冲区代替HeapAlloc，减少GC压力
                     int maxOutputSize = 2 * 44100;
                     byte* out_buffer = stackalloc byte[maxOutputSize];
 
-                    ffmpeg.swr_convert(_audioSwrContext, &out_buffer, 2 * 44100,
+                    int convertedSamples = ffmpeg.swr_convert(_audioSwrContext, &out_buffer, 2 * 44100,
                                       (byte**)&_audioFrame->data, _audioFrame->nb_samples);
 
                     int out_buffer_size = ffmpeg.av_samples_get_buffer_size(null, outChannelCount,
-                                                                          _audioFrame->nb_samples, outFormat, 1);
+                                                                          convertedSamples, outFormat, 1);
 
                     if (out_buffer_size > 0 && out_buffer_size <= maxOutputSize)
                     {
@@ -326,30 +349,68 @@ namespace UnityFFmpeg
                 try
                 {
                     // 计算视频PTS
-                    double pts = _videoFrame->best_effort_timestamp *
-                                ffmpeg.av_q2d(_pFormatContext->streams[_videoStreamIndex]->time_base);
+                    double pts;
+                    if (_videoFrame->pts != ffmpeg.AV_NOPTS_VALUE)
+                    {
+                        pts = _videoFrame->pts *
+                              ffmpeg.av_q2d(_pFormatContext->streams[_videoStreamIndex]->time_base);
+                    }
+                    else if (_videoFrame->pkt_dts != ffmpeg.AV_NOPTS_VALUE)
+                    {
+                        pts = _videoFrame->pkt_dts *
+                              ffmpeg.av_q2d(_pFormatContext->streams[_videoStreamIndex]->time_base);
+                    }
+                    else
+                    {
+                        // 如果没有有效的PTS，基于上一帧PTS和帧率估算
+                        pts = _lastVideoPts + _frameDuration;
+                    }
 
+                    // 减去音频基准时间，对齐到相同的基准
+                    double currentVideoTime = pts - _audioStartPts;
+
+                    // 更新视频时钟
                     lock (_clockLock)
                     {
-                        _videoClock = pts;
+                        _videoClock = currentVideoTime;
                     }
 
                     // 将帧加入队列
                     if (_videoFrameQueue.Count < MAX_VIDEO_QUEUE_SIZE)
                     {
-                        var frameHolder = new AVFrameHolder(_videoFrame, pts, _frameSize, _pixelFormat);
+                        var frameHolder = new AVFrameHolder(_videoFrame, currentVideoTime, _frameSize, _pixelFormat);
                         _videoFrameQueue.Enqueue(frameHolder);
                         _frameReadyEvent.Set();
+                        _lastVideoPts = pts;
                     }
                     else
                     {
-                        Debug.LogWarning("Video queue full, dropping frame");
-                        ffmpeg.av_frame_unref(_videoFrame);
+                        // 队列满时丢弃最旧的一帧，加入新帧
+                        if (_videoFrameQueue.TryDequeue(out AVFrameHolder oldFrame))
+                        {
+                            oldFrame.Dispose();
+                            _droppedFrames++;
+
+                            var frameHolder = new AVFrameHolder(_videoFrame, currentVideoTime, _frameSize, _pixelFormat);
+                            _videoFrameQueue.Enqueue(frameHolder);
+                            _frameReadyEvent.Set();
+                            _lastVideoPts = pts;
+
+                            // 每丢弃100帧输出一次警告
+                            if (_droppedFrames % 100 == 0)
+                            {
+                                Debug.LogWarning($"已丢弃 {_droppedFrames} 帧视频");
+                            }
+                        }
+                        else
+                        {
+                            ffmpeg.av_frame_unref(_videoFrame);
+                        }
                     }
                 }
                 catch (Exception ex)
                 {
-                    Debug.LogError($"ProcessVideoPacket Exception: {ex}");
+                    Debug.LogError($"处理视频包异常: {ex}");
                     ffmpeg.av_frame_unref(_videoFrame);
                 }
             }
@@ -359,10 +420,12 @@ namespace UnityFFmpeg
         {
             try
             {
+                double lastRenderTime = GetCurrentTime();
+
                 while (_isRunning && !_isDisposed)
                 {
                     // 等待帧可用，使用超时避免线程无限等待
-                    if (!_frameReadyEvent.WaitOne(100))
+                    if (!_frameReadyEvent.WaitOne(50))
                     {
                         continue;
                     }
@@ -377,11 +440,30 @@ namespace UnityFFmpeg
                             // 等待到正确显示时间
                             if (delay > 0)
                             {
-                                Thread.Sleep((int)(delay * 1000));
+                                // 使用更精确的等待
+                                int waitMs = (int)(delay * 1000);
+                                if (waitMs > 0)
+                                {
+                                    Thread.Sleep(Math.Min(waitMs, 500)); // 最多等待500ms
+                                }
                             }
 
                             // 转换并显示帧
                             DisplayVideoFrame(frameHolder);
+                            _renderedFrames++;
+
+                            // 记录渲染时间
+                            double currentTime = GetCurrentTime();
+                            double actualFrameTime = currentTime - lastRenderTime;
+                            lastRenderTime = currentTime;
+
+                            // 每渲染100帧输出一次调试信息
+                            if (_renderedFrames % 100 == 0)
+                            {
+                                double audioTime = GetAudioClock();
+                                Debug.Log($"已渲染 {_renderedFrames} 帧, 音频时间: {audioTime:F3}s, " +
+                                         $"视频PTS: {frameHolder.Pts:F3}s, 实际帧间隔: {actualFrameTime:F3}s");
+                            }
 
                             // 如果没有更多帧，重置事件
                             if (_videoFrameQueue.IsEmpty)
@@ -399,55 +481,68 @@ namespace UnityFFmpeg
             }
             catch (Exception ex)
             {
-                Debug.LogError($"RenderThread Exception: {ex}");
+                Debug.LogError($"渲染线程异常: {ex}");
             }
         }
 
-        private double CalculateFrameDelay(double pts)
+        private double CalculateFrameDelay(double videoPts)
         {
-            double actualDelay, delay;
+            double audioTime = GetAudioClock();
+            double diff = videoPts - audioTime;
 
-            double timeSinceLastFrame = GetCurrentTime() - _frameTimer;
-            delay = _frameDelay - timeSinceLastFrame;
+            // 基础延迟为帧间隔
+            double baseDelay = _frameDuration;
 
-            double refClock = _useAudioClock ?
-                GetAudioClock() :
-                GetCurrentTime() - _audioStartTime;
+            // 根据音视频差异调整延迟
+            const double MAX_SYNC_DIFF = 0.1; // 最大同步差异100ms
+            const double SYNC_THRESHOLD = 0.03; // 同步阈值30ms
 
-            double diff = pts - refClock;
-
-            const double syncThreshold = 0.05;
-
-            if (Math.Abs(diff) < syncThreshold)
+            if (!_audioStarted || Math.Abs(diff) < SYNC_THRESHOLD)
             {
-                actualDelay = delay;
+                // 音频未开始或差异很小，使用标准帧间隔
+                return baseDelay;
+            }
+            else if (diff > MAX_SYNC_DIFF)
+            {
+                // 视频超前太多，等待音频追赶
+                return baseDelay + MAX_SYNC_DIFF * 0.5;
+            }
+            else if (diff < -MAX_SYNC_DIFF)
+            {
+                // 视频落后太多，尽快显示
+                return Math.Max(0, baseDelay * 0.5);
             }
             else if (diff > 0)
             {
-                actualDelay = Math.Max(0, delay + diff);
+                // 视频稍快，稍微减慢
+                return baseDelay + diff * 0.5;
             }
             else
             {
-                actualDelay = delay + diff;
+                // 视频稍慢，加快显示
+                return Math.Max(0, baseDelay + diff);
             }
-
-            _frameTimer = GetCurrentTime();
-            actualDelay = Math.Max(0, Math.Min(actualDelay, 0.5));
-
-            return actualDelay;
         }
 
         private double GetAudioClock()
         {
             lock (_clockLock)
             {
-                return _audioClock;
+                if (_audioStarted)
+                {
+                    return _audioClock;
+                }
+                else
+                {
+                    // 音频未开始，使用系统时间
+                    return GetCurrentTime();
+                }
             }
         }
 
         private double GetCurrentTime()
         {
-            return Stopwatch.GetTimestamp() / (double)Stopwatch.Frequency;
+            return _renderStopwatch.Elapsed.TotalSeconds;
         }
 
         private unsafe void DisplayVideoFrame(AVFrameHolder frameHolder)
@@ -489,13 +584,13 @@ namespace UnityFFmpeg
             }
             catch (Exception ex)
             {
-                Debug.LogError($"DisplayVideoFrame Exception: {ex}");
+                Debug.LogError($"显示视频帧异常: {ex}");
             }
         }
 
         private unsafe void SetupLogging()
         {
-            ffmpeg.av_log_set_level(ffmpeg.AV_LOG_VERBOSE);
+            ffmpeg.av_log_set_level(ffmpeg.AV_LOG_WARNING);
             av_log_set_callback_callback logCallback = (p0, level, format, vl) =>
             {
                 if (level > ffmpeg.av_log_get_level())
@@ -515,32 +610,24 @@ namespace UnityFFmpeg
         private void ConfigureHWDecoder()
         {
             deviceType = AVHWDeviceType.AV_HWDEVICE_TYPE_NONE;
-            var availableHWDecoders = new Dictionary<int, AVHWDeviceType>();
+
+            // 在Unity中，通常不使用控制台输入，因此简化硬件解码器选择
+            // 优先尝试DXVA2（Windows）或VideoToolbox（macOS）
+#if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
+            deviceType = AVHWDeviceType.AV_HWDEVICE_TYPE_DXVA2;
+            Debug.Log("Windows平台，尝试使用DXVA2硬件解码");
+#elif UNITY_STANDALONE_OSX || UNITY_EDITOR_OSX
+            deviceType = AVHWDeviceType.AV_HWDEVICE_TYPE_VIDEOTOOLBOX;
+            Debug.Log("macOS平台，尝试使用VideoToolbox硬件解码");
+#endif
 
             var type = AVHWDeviceType.AV_HWDEVICE_TYPE_NONE;
             var number = 0;
+            Debug.Log("可用的硬件解码器:");
             while ((type = ffmpeg.av_hwdevice_iterate_types(type)) != AVHWDeviceType.AV_HWDEVICE_TYPE_NONE)
             {
                 Debug.Log($"{++number}. {type}");
-                availableHWDecoders.Add(number, type);
             }
-
-            if (availableHWDecoders.Count == 0)
-            {
-                Debug.Log("Your system have no hardware decoders.");
-                deviceType = AVHWDeviceType.AV_HWDEVICE_TYPE_NONE;
-                return;
-            }
-
-            int decoderNumber = availableHWDecoders.SingleOrDefault(t => t.Value == AVHWDeviceType.AV_HWDEVICE_TYPE_DXVA2).Key;
-            if (decoderNumber == 0)
-            {
-                decoderNumber = availableHWDecoders.First().Key;
-            }
-
-            Debug.LogWarning($"Selected [{decoderNumber}]");
-            int.TryParse(Console.ReadLine(), out var inputDecoderNumber);
-            availableHWDecoders.TryGetValue(inputDecoderNumber == 0 ? decoderNumber : inputDecoderNumber, out deviceType);
         }
 
         private AVPixelFormat GetHWPixelFormat(AVHWDeviceType hWDevice)
@@ -569,23 +656,28 @@ namespace UnityFFmpeg
             _isDisposed = true;
             _isRunning = false;
 
+            // 设置事件以唤醒等待的线程
+            _frameReadyEvent?.Set();
+
             // 等待线程结束
             if (thread != null && thread.IsAlive)
             {
-                thread.Join(5000); // 最多等待5秒
+                thread.Join(3000);
                 if (thread.IsAlive)
                 {
                     thread.Abort();
                 }
+                thread = null;
             }
 
             if (renderThread != null && renderThread.IsAlive)
             {
-                renderThread.Join(5000);
+                renderThread.Join(3000);
                 if (renderThread.IsAlive)
                 {
                     renderThread.Abort();
                 }
+                renderThread = null;
             }
 
             // 清空帧队列并释放资源
@@ -594,7 +686,9 @@ namespace UnityFFmpeg
                 frameHolder?.Dispose();
             }
 
-            _frameReadyEvent?.Dispose();
+            _frameReadyEvent?.Close();
+            _frameReadyEvent = null;
+
             _audioBufferPool?.Dispose();
             _videoBufferPool?.Dispose();
 
@@ -628,7 +722,6 @@ namespace UnityFFmpeg
             // 释放frames
             if (_audioFrame != null)
             {
-                ffmpeg.av_frame_unref(_audioFrame);
                 fixed (AVFrame** ptr = &_audioFrame)
                 {
                     ffmpeg.av_frame_free(ptr);
@@ -637,7 +730,6 @@ namespace UnityFFmpeg
 
             if (_videoFrame != null)
             {
-                ffmpeg.av_frame_unref(_videoFrame);
                 fixed (AVFrame** ptr = &_videoFrame)
                 {
                     ffmpeg.av_frame_free(ptr);
@@ -646,7 +738,6 @@ namespace UnityFFmpeg
 
             if (_g2cFrame != null)
             {
-                ffmpeg.av_frame_unref(_g2cFrame);
                 fixed (AVFrame** ptr = &_g2cFrame)
                 {
                     ffmpeg.av_frame_free(ptr);
@@ -655,14 +746,15 @@ namespace UnityFFmpeg
 
             if (_packet != null)
             {
-                ffmpeg.av_packet_unref(_packet);
                 fixed (AVPacket** ptr = &_packet)
                 {
                     ffmpeg.av_packet_free(ptr);
                 }
             }
 
-            Debug.LogWarning("FFPlayer disposed successfully");
+            _renderStopwatch.Stop();
+
+            Debug.Log($"FFPlayer已释放，渲染了 {_renderedFrames} 帧，丢弃了 {_droppedFrames} 帧");
         }
     }
 
@@ -679,7 +771,7 @@ namespace UnityFFmpeg
         public AVFrameHolder(AVFrame* frame, double pts, Size frameSize, AVPixelFormat pixelFormat)
         {
             Frame = ffmpeg.av_frame_alloc();
-            if (Frame != null)
+            if (Frame != null && frame != null)
             {
                 ffmpeg.av_frame_ref(Frame, frame);
             }
