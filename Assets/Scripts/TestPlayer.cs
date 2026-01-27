@@ -33,9 +33,9 @@ public class TestPlayer : MonoBehaviour
 
         // 测试URL
         //var url = "http://devimages.apple.com.edgekey.net/streaming/examples/bipbop_4x3/gear2/prog_index.m3u8";
-        //var url = "http://demo-videos.qnsdk.com/bbk-H265-50fps.mp4";
+        var url = "http://demo-videos.qnsdk.com/bbk-H265-50fps.mp4";
         //var url = "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4";
-        var url = Application.streamingAssetsPath + "/test.mp4";
+        //var url = Application.streamingAssetsPath + "/test.mp4";
 
         Debug.Log($"开始播放: {url}");
         Loom.RunAsync(() =>
