@@ -18,25 +18,24 @@ public class TestPlayer : MonoBehaviour
 
     // 音频相关
     public AudioSource audioSource;
+    private CircularAudioBuffer audioBuffer;
     private AudioClip audioClip;
     private int audioSampleRate = 44100;
-    private int audioChannels = 2;
-    private float[] audioBuffer;
-    private int audioBufferSize = 4096;
+    private int audioChannels = 2;  
 
     // Start is called before the first frame update
     void Start()
     {
         Loom.Initialize();
         // 初始化音频系统 
-        audioSource.spatialBlend = 0; // 2D音效
-        audioBuffer = new float[audioBufferSize];
+        audioSource.spatialBlend = 0; // 2D音效 
+        audioBuffer = new CircularAudioBuffer(audioSampleRate * audioChannels * 5);
 
         // 测试URL
         //var url = "http://devimages.apple.com.edgekey.net/streaming/examples/bipbop_4x3/gear2/prog_index.m3u8";
         var url = "http://demo-videos.qnsdk.com/bbk-H265-50fps.mp4";
         //var url = "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4";
-        //var url = Application.streamingAssetsPath + "/test.mp4";
+        //var url = Application.streamingAssetsPath + "/08.mp4";
 
         Debug.Log($"开始播放: {url}");
         Loom.RunAsync(() =>
@@ -111,66 +110,47 @@ public class TestPlayer : MonoBehaviour
 
     private void OnAudioData(byte[] data)
     {
-        if (data != null)
+        if (data == null || data.Length == 0)
         {
-            if (audioQueue.Count < 20) // 限制音频队列大小
-            {
-                audioQueue.Enqueue(data);
-            }
-
-            //Loom.QueueOnMainThread(() =>
-            //{
-            //    // 如果还没有创建AudioClip，创建它
-            //    if (audioClip == null)
-            //    {
-            //        // 创建一个足够大的AudioClip来存储音频数据
-            //        audioClip = AudioClip.Create("StreamingAudio", audioSampleRate * 10, audioChannels, audioSampleRate, false);
-            //        audioSource.clip = audioClip;
-            //        audioSource.loop = false;
-            //        audioSource.Play();
-            //    }
-            //});
+            return;
         }
+
+        // ✅ 转换字节数组为浮点数组
+        int floatCount = data.Length / 2;
+        float[] floatArray = new float[floatCount];
+        ByteArrayToFloatArray(data, floatArray, floatCount);
+
+        // ✅ 写入循环缓冲区
+        audioBuffer.Write(floatArray);
+        // ✅ 确保AudioClip已创建并播放
+        Loom.QueueOnMainThread(() =>
+        {
+            if (audioSource.clip == null && audioBuffer.Count > audioSampleRate)
+            {
+                // 创建流式AudioClip（使用OnAudioFilterRead回调）
+                audioSource.clip = AudioClip.Create(
+                    "StreamingAudio",
+                    audioSampleRate * 5 * 2,  // 10秒缓冲
+                    audioChannels,
+                    audioSampleRate,
+                    true,  // ✅ 启用流式播放
+                    OnAudioFilterRead  // ✅ 使用回调读取
+                );
+
+                audioSource.loop = true;
+                audioSource.Play();
+                Debug.Log("✅ 流式AudioClip已创建并开始播放");
+            }
+        }); 
     }
 
-    private void OnAudioFilterRead(float[] data, int channels)
+    /// <summary>
+    /// 音频过滤读取回调 - Unity会自动调用此方法
+    /// 直接从循环缓冲区读取音频数据
+    /// </summary>
+    private void OnAudioFilterRead(float[] data)
     {
-        if (audioQueue.Count > 0 && channels == audioChannels)
-        {
-            byte[] audioBytes = audioQueue.Dequeue();
-            if (audioBytes != null && audioBytes.Length > 0)
-            {
-                // 将字节数据转换为浮点数
-                int floatCount = audioBytes.Length / 2;
-                if (audioBuffer == null || audioBuffer.Length < floatCount)
-                {
-                    audioBuffer = new float[floatCount];
-                }
-
-                ByteArrayToFloatArray(audioBytes, audioBuffer, floatCount);
-
-                // 填充音频数据
-                int copyLength = Mathf.Min(floatCount, data.Length);
-                for (int i = 0; i < copyLength; i++)
-                {
-                    data[i] = audioBuffer[i];
-                }
-
-                // 如果还有剩余空间，填充0
-                for (int i = copyLength; i < data.Length; i++)
-                {
-                    data[i] = 0;
-                }
-            }
-        }
-        else
-        {
-            // 没有音频数据，填充0
-            for (int i = 0; i < data.Length; i++)
-            {
-                data[i] = 0;
-            }
-        }
+        audioBuffer.Read(data, data.Length);
     }
 
     private void ByteArrayToFloatArray(byte[] byteArray, float[] floatArray, int length)
