@@ -21,7 +21,8 @@ public class TestPlayer : MonoBehaviour
     private CircularAudioBuffer audioBuffer;
     private AudioClip audioClip;
     private int audioSampleRate = 44100;
-    private int audioChannels = 2;  
+    private int audioChannels = 2;
+    private const int AUDIO_BUFFER_SECONDS = 1;
 
     // Start is called before the first frame update
     void Start()
@@ -29,13 +30,13 @@ public class TestPlayer : MonoBehaviour
         Loom.Initialize();
         // 初始化音频系统 
         audioSource.spatialBlend = 0; // 2D音效 
-        audioBuffer = new CircularAudioBuffer(audioSampleRate * audioChannels * 5);
+        audioBuffer = new CircularAudioBuffer(audioSampleRate * audioChannels * AUDIO_BUFFER_SECONDS);
 
         // 测试URL
         //var url = "http://devimages.apple.com.edgekey.net/streaming/examples/bipbop_4x3/gear2/prog_index.m3u8";
-        var url = "http://demo-videos.qnsdk.com/bbk-H265-50fps.mp4";
+        //var url = "http://demo-videos.qnsdk.com/bbk-H265-50fps.mp4";
         //var url = "http://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4";
-        //var url = Application.streamingAssetsPath + "/08.mp4";
+        var url = Application.streamingAssetsPath + "/08.mp4";
 
         Debug.Log($"开始播放: {url}");
         Loom.RunAsync(() =>
@@ -125,12 +126,12 @@ public class TestPlayer : MonoBehaviour
         // ✅ 确保AudioClip已创建并播放
         Loom.QueueOnMainThread(() =>
         {
-            if (audioSource.clip == null && audioBuffer.Count > audioSampleRate)
+            if (audioSource.clip == null && audioBuffer.Count > audioSampleRate / 10)
             {
                 // 创建流式AudioClip（使用OnAudioFilterRead回调）
                 audioSource.clip = AudioClip.Create(
                     "StreamingAudio",
-                    audioSampleRate * 5 * 2,  // 10秒缓冲
+                    audioSampleRate * AUDIO_BUFFER_SECONDS,  // 10秒缓冲
                     audioChannels,
                     audioSampleRate,
                     true,  // ✅ 启用流式播放
@@ -141,7 +142,7 @@ public class TestPlayer : MonoBehaviour
                 audioSource.Play();
                 Debug.Log("✅ 流式AudioClip已创建并开始播放");
             }
-        }); 
+        });
     }
 
     /// <summary>

@@ -314,7 +314,7 @@ namespace UnityFFmpeg
 
                     int out_buffer_size = ffmpeg.av_samples_get_buffer_size(null, outChannelCount,
                                                                           convertedSamples, outFormat, 1);
-                    Debug.LogWarning("out_buffer_size:" + out_buffer_size);
+                    //Debug.LogWarning("out_buffer_size:" + out_buffer_size);
                     if (out_buffer_size > 0 && out_buffer_size <= maxOutputSize)
                     {
                         // 从对象池获取缓冲区
@@ -494,8 +494,8 @@ namespace UnityFFmpeg
             double baseDelay = _frameDuration;
 
             // 根据音视频差异调整延迟
-            const double MAX_SYNC_DIFF = 0.1; // 最大同步差异100ms
-            const double SYNC_THRESHOLD = 0.03; // 同步阈值30ms
+            const double MAX_SYNC_DIFF = 0.1;       // 100ms
+            const double SYNC_THRESHOLD = 0.02;     // 20ms 
 
             if (!_audioStarted || Math.Abs(diff) < SYNC_THRESHOLD)
             {
@@ -515,7 +515,7 @@ namespace UnityFFmpeg
             else if (diff > 0)
             {
                 // 视频稍快，稍微减慢
-                return baseDelay + diff * 0.5;
+                return baseDelay - (diff * 1);
             }
             else
             {
